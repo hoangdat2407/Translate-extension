@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "WordDeck Translator",
-  "version": "1.0.9",
-  "description": "Select English words to show a translate icon, auto-save Vietnamese meanings to a deck, review flashcards, highlight saved words, and sync via Google Drive OAuth.",
+  "version": "1.0.12",
+  "description": "Select text to translate with a floating icon, auto-save vocabulary cards, review flashcards, highlight saved words, and sync via Google Drive OAuth.",
   "permissions": [
     "storage",
     "identity",
