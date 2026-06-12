@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "WordDeck Translator",
+  "version": "1.0.9",
+  "description": "Select English words to show a translate icon, auto-save Vietnamese meanings to a deck, review flashcards, highlight saved words, and sync via Google Drive OAuth.",
+  "permissions": [
+    "storage",
+    "identity",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://api.mymemory.translated.net/*",
+    "https://api.dictionaryapi.dev/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "https://accounts.google.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "WordDeck Translator",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html"
+}

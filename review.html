@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WordDeck Review</title>
+  <link rel="stylesheet" href="review.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <div>
+        <h1>Ôn tập WordDeck</h1>
+        <p id="summary">Đang tải deck...</p>
+      </div>
+      <button id="shuffle" class="secondary">Shuffle</button>
+    </header>
+
+    <section class="toolbar">
+      <input id="search" type="search" placeholder="Tìm từ hoặc nghĩa..." />
+      <button id="prev" class="secondary">← Trước</button>
+      <button id="next" class="primary">Tiếp →</button>
+    </section>
+
+    <section id="card" class="flashcard" tabindex="0" title="Click để hiện/ẩn nghĩa">
+      <div id="word" class="word">—</div>
+      <div id="translation" class="translation hidden-text">Click để hiện nghĩa</div>
+      <div id="context" class="context"></div>
+      <div id="source" class="source"></div>
+    </section>
+
+    <section class="actions">
+      <button id="reveal" class="primary">Hiện nghĩa</button>
+      <button id="deleteWord" class="danger">Xóa từ này</button>
+      <button id="exportDeck" class="secondary">Export JSON</button>
+    </section>
+
+    <section class="hint">
+      Phím tắt: <kbd>Space</kbd> hiện/ẩn nghĩa, <kbd>←</kbd>/<kbd>→</kbd> chuyển từ.
+    </section>
+
+    <section id="miniList" class="mini-list"></section>
+  </main>
+  <script src="review.js"></script>
+</body>
+</html>

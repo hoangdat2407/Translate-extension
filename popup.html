@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WordDeck Translator</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="header">
+      <div>
+        <h1>WordDeck</h1>
+        <p id="summary">Đang tải...</p>
+      </div>
+      <button id="openOptions" class="ghost">⚙</button>
+    </header>
+
+    <section class="panel">
+      <label class="switch-row">
+        <span>Bôi đen hiện icon dịch</span>
+        <input id="selectionIconEnabled" type="checkbox" />
+      </label>
+      <label class="field compact-field">
+        <span>Chữ/icon nổi</span>
+        <input id="selectionIconLabel" type="text" maxlength="3" placeholder="VI" />
+      </label>
+      <label class="field">
+        <span>Nguồn dịch</span>
+        <select id="translationProvider">
+          <option value="gemini">Gemini</option>
+          <option value="dictionary">Free fallback</option>
+        </select>
+      </label>
+      <label class="switch-row">
+        <span>Dịch bằng click cũ</span>
+        <input id="clickTranslateEnabled" type="checkbox" />
+      </label>
+      <label class="switch-row">
+        <span>Highlight từ đã lưu</span>
+        <input id="highlightEnabled" type="checkbox" />
+      </label>
+      <label class="switch-row">
+        <span>Double-click tự lưu</span>
+        <input id="autoSaveOnDoubleClick" type="checkbox" />
+      </label>
+      <label class="field">
+        <span>Chế độ click</span>
+        <select id="clickMode">
+          <option value="single">Click thường trên chữ</option>
+          <option value="alt">Alt + Click</option>
+          <option value="double">Double click</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="panel sync">
+      <button id="syncGoogle" class="primary">Login & Sync Google</button>
+      <button id="logoutGoogle" class="secondary">Logout token</button>
+      <p id="syncStatus"></p>
+    </section>
+
+    <section class="panel tools">
+      <input id="search" type="search" placeholder="Tìm trong deck..." />
+      <div class="tool-row">
+        <button id="openReview" class="primary">Ôn tập deck</button>
+        <button id="exportDeck" class="secondary">Export JSON</button>
+        <label class="secondary import-label">
+          Import
+          <input id="importDeck" type="file" accept="application/json" hidden />
+        </label>
+      </div>
+    </section>
+
+    <section id="deckList" class="deck-list"></section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

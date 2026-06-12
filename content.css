@@ -1,0 +1,12 @@
+.worddeck-highlight {
+  background: #fff2a8;
+  border-bottom: 2px solid #f2c94c;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0 1px;
+}
+
+.worddeck-highlight:hover {
+  background: #ffe680;
+  border-bottom-color: #d99a00;
+}

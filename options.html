@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WordDeck Options</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <main class="page">
+    <h1>WordDeck Translator — Options</h1>
+    <p class="lead">Cấu hình Google OAuth để extension mở browser login rồi sync deck vào Google Drive appDataFolder.</p>
+
+    <section class="card">
+      <h2>Google OAuth</h2>
+      <label class="field">
+        <span>Google OAuth Client ID</span>
+        <input id="googleClientId" type="text" placeholder="xxxx.apps.googleusercontent.com" />
+      </label>
+      <label class="field">
+        <span>Redirect URI cần add trong Google Cloud</span>
+        <input id="redirectUri" type="text" readonly />
+      </label>
+      <button id="copyRedirect" class="secondary">Copy Redirect URI</button>
+      <p class="note">Nếu bị <code>redirect_uri_mismatch</code>, gần như chắc chắn là do chưa add đúng Redirect URI ở trên vào OAuth Client.</p>
+    </section>
+
+    <section class="card">
+      <h2>Dịch</h2>
+      <label class="field">
+        <span>Nguồn dịch</span>
+        <select id="translationProvider">
+          <option value="gemini">Gemini API — khuyên dùng cho cá nhân</option>
+          <option value="dictionary">Free Dictionary + MyMemory fallback</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Gemini API key</span>
+        <input id="geminiApiKey" type="password" placeholder="AIza..." autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>Gemini model</span>
+        <input id="geminiModel" type="text" placeholder="gemini-2.5-flash" />
+      </label>
+      <label class="field">
+        <span>MyMemory email optional</span>
+        <input id="myMemoryEmail" type="text" placeholder="email của m, không bắt buộc" />
+      </label>
+      <p class="note">Nếu dùng cá nhân thì dán Gemini API key trực tiếp được. Đừng publish extension có key. Nếu thiếu key hoặc Gemini lỗi, extension sẽ fallback sang Dictionary/MyMemory.</p>
+    </section>
+
+    <section class="card">
+      <h2>Hành vi trên trang</h2>
+      <label class="check"><input id="selectionIconEnabled" type="checkbox" /> Bôi đen hiện icon dịch</label>
+      <label class="field">
+        <span>Chữ/icon nổi khi bôi đen</span>
+        <input id="selectionIconLabel" type="text" maxlength="3" placeholder="VI, 🌐, 📘..." />
+      </label>
+      <label class="check"><input id="clickTranslateEnabled" type="checkbox" /> Bật dịch bằng click cũ</label>
+      <label class="check"><input id="highlightEnabled" type="checkbox" /> Highlight từ đã lưu</label>
+      <label class="check"><input id="autoSaveOnDoubleClick" type="checkbox" /> Double-click tự dịch và tự lưu khi dùng mode click cũ</label>
+      <label class="field">
+        <span>Chế độ click</span>
+        <select id="clickMode">
+          <option value="single">Click thường trên chữ</option>
+          <option value="alt">Alt + Click</option>
+          <option value="double">Double click</option>
+        </select>
+      </label>
+    </section>
+
+    <div class="actions">
+      <button id="save" class="primary">Lưu cấu hình</button>
+      <span id="status"></span>
+    </div>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

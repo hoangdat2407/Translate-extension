@@ -1,0 +1,786 @@
+const STORAGE_KEYS = {
+  DECK: "wordDeck",
+  SETTINGS: "settings",
+  GOOGLE_TOKEN: "googleAccessToken",
+  GOOGLE_TOKEN_EXPIRES_AT: "googleTokenExpiresAt"
+};
+
+const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
+const GEMINI_FALLBACK_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-lite"
+];
+
+const DEFAULT_SETTINGS = {
+  selectionIconEnabled: true,
+  clickTranslateEnabled: false,
+  clickMode: "single", // single | alt | double
+  googleClientId: "",
+  myMemoryEmail: "",
+  geminiApiKey: "",
+  geminiModel: GEMINI_DEFAULT_MODEL,
+  translationProvider: "gemini", // gemini | dictionary
+  highlightEnabled: true,
+  autoSaveOnDoubleClick: true,
+  selectionIconLabel: "VI"
+};
+
+const DRIVE_DECK_FILE_NAME = "worddeck-translator-deck.json";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const settings = await getSettings();
+  await chrome.storage.local.set({ [STORAGE_KEYS.SETTINGS]: settings });
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  handleMessage(message, sender)
+    .then(sendResponse)
+    .catch((error) => {
+      console.error(error);
+      sendResponse({ ok: false, error: error?.message || String(error) });
+    });
+  return true;
+});
+
+async function handleMessage(message, sender) {
+  switch (message?.type) {
+    case "GET_STATE": {
+      const [deck, settings] = await Promise.all([getDeck(), getSettings()]);
+      return { ok: true, deck, settings, redirectUri: chrome.identity.getRedirectURL("oauth2") };
+    }
+    case "GET_DECK": {
+      return { ok: true, deck: await getDeck() };
+    }
+    case "TRANSLATE_WORD": {
+      const word = normalizeWord(message.word);
+      if (!word) throw new Error("No word to translate");
+      const deck = await getDeck();
+      const existing = deck.find((item) => item.normalized === word.toLowerCase());
+      if (existing?.translation) {
+        return {
+          ok: true,
+          word,
+          translation: existing.translation,
+          meanings: existing.meanings || [existing.translation],
+          definitions: existing.definitions || [],
+          provider: existing.provider || "deck",
+          fromDeck: true,
+          entry: existing
+        };
+      }
+      const translated = await translateWordToVietnamese(word);
+      return {
+        ok: true,
+        word,
+        translation: translated.primary,
+        meanings: translated.meanings,
+        definitions: translated.definitions,
+        provider: translated.provider,
+        fromDeck: false
+      };
+    }
+    case "SAVE_WORD": {
+      const entry = await saveWord(message.payload || {}, sender?.tab || null);
+      await broadcastDeckChanged();
+      return { ok: true, entry, deck: await getDeck() };
+    }
+    case "DELETE_WORD": {
+      const normalized = String(message.normalized || "").toLowerCase();
+      const deck = await getDeck();
+      const nextDeck = deck.filter((item) => item.normalized !== normalized);
+      await setDeck(nextDeck);
+      await broadcastDeckChanged();
+      return { ok: true, deck: nextDeck };
+    }
+    case "CLEAR_DECK": {
+      await setDeck([]);
+      await broadcastDeckChanged();
+      return { ok: true, deck: [] };
+    }
+    case "IMPORT_DECK": {
+      const incoming = Array.isArray(message.deck) ? message.deck : [];
+      const merged = mergeDecks(await getDeck(), sanitizeDeck(incoming));
+      await setDeck(merged);
+      await broadcastDeckChanged();
+      return { ok: true, deck: merged };
+    }
+    case "UPDATE_SETTINGS": {
+      const settings = await updateSettings(message.patch || {});
+      await broadcastSettingsChanged();
+      return { ok: true, settings, redirectUri: chrome.identity.getRedirectURL("oauth2") };
+    }
+    case "GOOGLE_LOGIN": {
+      const token = await getGoogleAccessToken(true);
+      return { ok: true, hasToken: Boolean(token) };
+    }
+    case "GOOGLE_LOGOUT": {
+      await clearGoogleToken();
+      return { ok: true };
+    }
+    case "GOOGLE_SYNC": {
+      const result = await syncDeckWithGoogleDrive();
+      await broadcastDeckChanged();
+      return { ok: true, ...result };
+    }
+    default:
+      throw new Error("Unknown message type");
+  }
+}
+
+async function getDeck() {
+  const data = await chrome.storage.local.get(STORAGE_KEYS.DECK);
+  return Array.isArray(data[STORAGE_KEYS.DECK]) ? sanitizeDeck(data[STORAGE_KEYS.DECK]) : [];
+}
+
+async function setDeck(deck) {
+  await chrome.storage.local.set({ [STORAGE_KEYS.DECK]: sanitizeDeck(deck) });
+}
+
+async function getSettings() {
+  const data = await chrome.storage.local.get(STORAGE_KEYS.SETTINGS);
+  return normalizeSettings({ ...DEFAULT_SETTINGS, ...(data[STORAGE_KEYS.SETTINGS] || {}) });
+}
+
+function normalizeSettings(settings) {
+  settings.clickMode = ["single", "alt", "double"].includes(settings.clickMode) ? settings.clickMode : "single";
+  settings.selectionIconEnabled = settings.selectionIconEnabled !== false;
+  settings.clickTranslateEnabled = Boolean(settings.clickTranslateEnabled);
+  settings.highlightEnabled = settings.highlightEnabled !== false;
+  settings.autoSaveOnDoubleClick = Boolean(settings.autoSaveOnDoubleClick);
+  settings.selectionIconLabel = normalizeIconLabel(settings.selectionIconLabel || "VI");
+  settings.geminiApiKey = String(settings.geminiApiKey || "").trim();
+  settings.geminiModel = normalizeGeminiModel(settings.geminiModel);
+  settings.translationProvider = ["gemini", "dictionary"].includes(settings.translationProvider) ? settings.translationProvider : "gemini";
+
+  // Default mode is selection icon. Keep old click/double-click mode only when the user explicitly enables it.
+  if (settings.selectionIconEnabled) settings.clickTranslateEnabled = false;
+  return settings;
+}
+
+function normalizeGeminiModel(model) {
+  const value = String(model || "").trim();
+  // Old builds used a bad/default placeholder model. Migrate silently so existing installs recover.
+  if (!value || value === "gemini-3.5-flash") return GEMINI_DEFAULT_MODEL;
+  return value;
+}
+
+async function updateSettings(patch) {
+  const settings = { ...(await getSettings()), ...patch };
+
+  // These two modes are mutually exclusive, so pages do not translate accidentally.
+  if (patch.selectionIconEnabled === true) settings.clickTranslateEnabled = false;
+  if (patch.clickTranslateEnabled === true) settings.selectionIconEnabled = false;
+
+  const normalized = normalizeSettings(settings);
+  await chrome.storage.local.set({ [STORAGE_KEYS.SETTINGS]: normalized });
+  return normalized;
+}
+
+async function translateWordToVietnamese(word) {
+  const settings = await getSettings();
+
+  // Cá nhân dùng thì Gemini API key trong extension là cách đơn giản nhất.
+  // Nếu chưa có key hoặc Gemini lỗi/rate-limit, rơi về Dictionary API + MyMemory để extension vẫn dùng được.
+  if (settings.translationProvider === "gemini" && settings.geminiApiKey) {
+    try {
+      return await translateViaGemini(word, settings);
+    } catch (error) {
+      console.warn("Gemini translation failed, falling back", error);
+      const fallback = await translateViaDictionaryAndMemory(word);
+      return { ...fallback, provider: `${fallback.provider} · Gemini failed: ${(error?.message || "unknown").slice(0, 80)}` };
+    }
+  }
+
+  return translateViaDictionaryAndMemory(word);
+}
+
+async function translateViaDictionaryAndMemory(word) {
+  const [memoryResult, dictionaryResult] = await Promise.allSettled([
+    translateViaMyMemory(word),
+    fetchDictionaryDefinitions(word)
+  ]);
+
+  const memory = memoryResult.status === "fulfilled" ? memoryResult.value : { primary: "", meanings: [] };
+  const definitions = dictionaryResult.status === "fulfilled" ? dictionaryResult.value : [];
+  const meanings = uniqueClean([memory.primary, ...(memory.meanings || [])])
+    .filter((x) => x && x.toLowerCase() !== word.toLowerCase())
+    .slice(0, 8);
+
+  const primary = meanings[0] || memory.primary || word;
+  return {
+    primary,
+    meanings: meanings.length ? meanings : [primary],
+    definitions,
+    provider: "Free Dictionary API + MyMemory fallback"
+  };
+}
+
+async function translateViaGemini(word, settings) {
+  const requestedModel = normalizeGeminiModel(settings.geminiModel);
+  // 503 often means Google temporarily overloaded that model/region, not that the API key is wrong.
+  // Try a small/faster model next so personal use does not immediately fall back to weak translation.
+  const modelsToTry = uniqueClean([requestedModel, ...GEMINI_FALLBACK_MODELS]);
+  let lastError = null;
+
+  for (const modelName of modelsToTry) {
+    try {
+      return await translateViaGeminiModel(word, settings, modelName);
+    } catch (error) {
+      lastError = error;
+      console.warn("Gemini model failed", modelName, error);
+    }
+  }
+
+  throw lastError || new Error("Gemini failed");
+}
+
+async function translateViaGeminiModel(word, settings, modelName) {
+  const prompt = `You are a compact English-Vietnamese vocabulary dictionary for a Vietnamese cybersecurity/IELTS learner.
+Analyze this English word or phrase: "${word}".
+Return ONLY a JSON object matching the schema. Do not use markdown. Do not add prose before/after JSON.
+Meanings must be natural Vietnamese, context-aware, and common meanings first.
+For technical/security/legal meanings, mention the domain briefly in viDefinition or notes.
+If the phrase is a command, idiom, phrasal verb, or fixed expression, explain that instead of translating word-by-word.`;
+
+  const model = encodeURIComponent(modelName || GEMINI_DEFAULT_MODEL);
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const requestBody = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 1200,
+      responseMimeType: "application/json",
+      responseSchema: geminiDictionarySchema()
+    }
+  };
+
+  const response = await geminiFetchWithRetry(url, settings.geminiApiKey, requestBody);
+
+  const data = await response.json();
+  const text = extractGeminiText(data);
+  const parsed = parseGeminiDictionaryOutput(text, word);
+  const primary = cleanTranslation(parsed?.primary || parsed?.meaning || "");
+  const meanings = uniqueClean([primary, ...(Array.isArray(parsed?.meanings) ? parsed.meanings : [])]).slice(0, 8);
+  const definitions = sanitizeDefinitions(Array.isArray(parsed?.definitions) ? parsed.definitions : []);
+  const notes = cleanTranslation(parsed?.notes || "");
+  if (notes) {
+    definitions.push({ partOfSpeech: "note", definition: notes, viDefinition: notes, example: "", synonyms: [] });
+  }
+
+  const finalPrimary = meanings[0] || definitions[0]?.viDefinition || word;
+  return {
+    primary: finalPrimary,
+    meanings: meanings.length ? meanings : [finalPrimary],
+    definitions: definitions.slice(0, 8),
+    provider: `Gemini (${modelName})${parsed.__loose ? " · loose parse" : ""}`
+  };
+}
+
+
+async function geminiFetchWithRetry(url, apiKey, requestBody) {
+  let lastResponse = null;
+  let lastText = "";
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey
+      },
+      body: JSON.stringify(requestBody)
+    }, 18000);
+
+    if (response.ok) return response;
+
+    lastResponse = response;
+    lastText = await response.text().catch(() => "");
+
+    // 503/429 are usually transient overload/rate-limit. One short retry helps without making the UI feel stuck.
+    if (![429, 500, 502, 503, 504].includes(response.status)) break;
+    await sleep(650 + attempt * 900);
+  }
+
+  throw new Error(`Gemini API failed ${lastResponse?.status || "unknown"}: ${lastText.slice(0, 220)}`);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function geminiDictionarySchema() {
+  return {
+    type: "OBJECT",
+    properties: {
+      primary: { type: "STRING" },
+      meanings: { type: "ARRAY", items: { type: "STRING" } },
+      definitions: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            partOfSpeech: { type: "STRING" },
+            definition: { type: "STRING" },
+            viDefinition: { type: "STRING" },
+            example: { type: "STRING" },
+            synonyms: { type: "ARRAY", items: { type: "STRING" } }
+          },
+          required: ["partOfSpeech", "definition", "viDefinition", "example", "synonyms"]
+        }
+      },
+      notes: { type: "STRING" }
+    },
+    required: ["primary", "meanings", "definitions", "notes"]
+  };
+}
+
+function extractGeminiText(data) {
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const text = parts.map((part) => part.text || "").join("\n").trim();
+  if (text) return text;
+  const reason = data?.candidates?.[0]?.finishReason;
+  if (reason) throw new Error(`Gemini returned empty text; finishReason=${reason}`);
+  throw new Error("Gemini returned empty text");
+}
+
+function parseGeminiDictionaryOutput(text, word) {
+  const raw = String(text || "").trim();
+  if (!raw) throw new Error("Gemini returned empty text");
+
+  const parsed = tryParseJsonObject(raw);
+  if (parsed) return parsed;
+
+  // Last-resort: Gemini sometimes ignores JSON despite responseMimeType on older/preview models.
+  // Keep Gemini's answer instead of dropping to weak machine translation.
+  const lines = raw
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .split(/\n+/)
+    .map((line) => cleanTranslation(line.replace(/^[-*•\d.)\s]+/, "")))
+    .filter(Boolean)
+    .slice(0, 8);
+
+  if (!lines.length) throw new Error("Gemini did not return valid JSON");
+
+  return {
+    __loose: true,
+    primary: lines[0],
+    meanings: uniqueClean(lines).slice(0, 5),
+    definitions: [{
+      partOfSpeech: "note",
+      definition: raw.slice(0, 500),
+      viDefinition: lines.join("; ").slice(0, 500),
+      example: "",
+      synonyms: []
+    }],
+    notes: "Gemini trả về text thường, extension đã tự parse tạm."
+  };
+}
+
+function tryParseJsonObject(raw) {
+  try { return JSON.parse(raw); } catch (_) {}
+
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  if (fenced) {
+    try { return JSON.parse(fenced.trim()); } catch (_) {}
+  }
+
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    try { return JSON.parse(raw.slice(first, last + 1)); } catch (_) {}
+  }
+
+  return null;
+}
+
+async function translateViaMyMemory(text) {
+  const settings = await getSettings();
+  const url = new URL("https://api.mymemory.translated.net/get");
+  url.searchParams.set("q", text);
+  url.searchParams.set("langpair", "en|vi");
+  if (settings.myMemoryEmail) url.searchParams.set("de", settings.myMemoryEmail);
+
+  const response = await fetchWithTimeout(url.toString(), {}, 9000);
+  if (!response.ok) throw new Error(`Translation API failed: ${response.status}`);
+  const data = await response.json();
+
+  const primary = cleanTranslation(data?.responseData?.translatedText || "");
+  const fromMatches = Array.isArray(data?.matches)
+    ? data.matches
+        .map((item) => cleanTranslation(item?.translation || ""))
+        .filter(Boolean)
+    : [];
+
+  return {
+    primary,
+    meanings: uniqueClean([primary, ...fromMatches]).slice(0, 10)
+  };
+}
+
+async function fetchDictionaryDefinitions(word) {
+  const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word.toLowerCase())}`;
+  const response = await fetchWithTimeout(url, {}, 8000);
+  if (!response.ok) return [];
+  const entries = await response.json();
+  if (!Array.isArray(entries)) return [];
+
+  const raw = [];
+  for (const entry of entries) {
+    for (const meaning of entry.meanings || []) {
+      const partOfSpeech = String(meaning.partOfSpeech || "").trim();
+      for (const def of (meaning.definitions || []).slice(0, 2)) {
+        const definition = String(def.definition || "").trim();
+        if (!definition) continue;
+        raw.push({
+          partOfSpeech,
+          definition,
+          example: String(def.example || "").trim(),
+          synonyms: Array.isArray(def.synonyms) ? def.synonyms.slice(0, 5) : []
+        });
+        if (raw.length >= 5) break;
+      }
+      if (raw.length >= 5) break;
+    }
+    if (raw.length >= 5) break;
+  }
+
+  // Dịch nhanh định nghĩa sang tiếng Việt để panel có “các nghĩa” dễ học hơn.
+  const translated = [];
+  for (const item of raw.slice(0, 4)) {
+    let viDefinition = "";
+    try {
+      viDefinition = (await translateViaMyMemory(item.definition)).primary;
+    } catch (_) {}
+    translated.push({ ...item, viDefinition: viDefinition || item.definition });
+  }
+  return translated;
+}
+
+function uniqueClean(items) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of items || []) {
+    const text = cleanTranslation(raw)
+      .replace(/^['"“”‘’]+|['"“”‘’]+$/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out;
+}
+
+function cleanTranslation(text) {
+  return String(text || "")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .trim();
+}
+
+function sanitizeMeanings(meanings, translation = "") {
+  return uniqueClean([...(Array.isArray(meanings) ? meanings : []), translation]).slice(0, 8);
+}
+
+function sanitizeDefinitions(definitions) {
+  if (!Array.isArray(definitions)) return [];
+  return definitions.slice(0, 6).map((item) => ({
+    partOfSpeech: String(item?.partOfSpeech || "").slice(0, 30),
+    definition: String(item?.definition || "").slice(0, 400),
+    viDefinition: String(item?.viDefinition || "").slice(0, 500),
+    example: String(item?.example || "").slice(0, 300),
+    synonyms: Array.isArray(item?.synonyms) ? item.synonyms.map(String).slice(0, 5) : []
+  })).filter((item) => item.definition || item.viDefinition);
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 9000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function saveWord(payload, tab) {
+  const word = normalizeWord(payload.word);
+  const translation = String(payload.translation || "").trim();
+  if (!word) throw new Error("Missing word");
+  if (!translation) throw new Error("Missing translation");
+
+  const now = new Date().toISOString();
+  const normalized = word.toLowerCase();
+  const deck = await getDeck();
+  const existingIndex = deck.findIndex((item) => item.normalized === normalized);
+
+  const entry = {
+    id: existingIndex >= 0 ? deck[existingIndex].id : crypto.randomUUID(),
+    word,
+    normalized,
+    translation,
+    meanings: sanitizeMeanings(payload.meanings, translation),
+    definitions: sanitizeDefinitions(payload.definitions),
+    provider: String(payload.provider || "").slice(0, 80),
+    context: String(payload.context || "").slice(0, 500),
+    sourceUrl: String(payload.sourceUrl || tab?.url || ""),
+    sourceTitle: String(payload.sourceTitle || tab?.title || ""),
+    createdAt: existingIndex >= 0 ? deck[existingIndex].createdAt : now,
+    updatedAt: now,
+    timesSeen: existingIndex >= 0 ? (deck[existingIndex].timesSeen || 0) + 1 : 1
+  };
+
+  if (existingIndex >= 0) deck[existingIndex] = { ...deck[existingIndex], ...entry };
+  else deck.unshift(entry);
+
+  await setDeck(deck);
+  return entry;
+}
+
+function normalizeImportedTranslation(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .slice(0, 5)
+      .join("; ");
+  }
+  if (value && typeof value === "object") {
+    if (Array.isArray(value.t)) return normalizeImportedTranslation(value.t);
+    if (Array.isArray(value.translations)) return normalizeImportedTranslation(value.translations);
+    if (value.text) return String(value.text).trim();
+  }
+  return String(value || "").trim();
+}
+
+function sanitizeDeck(deck) {
+  const seen = new Map();
+  for (const raw of deck) {
+    if (!raw || typeof raw !== "object") continue;
+    const word = normalizeWord(raw.word || raw.normalized || raw.o || raw.original || raw.term);
+    const rawTranslation = raw.translation ?? raw.vi ?? raw.meaning ?? raw.definition ?? raw.t ?? raw.translations;
+    const translation = normalizeImportedTranslation(rawTranslation);
+    if (!word || !translation) continue;
+    const normalized = word.toLowerCase();
+    const item = {
+      id: String(raw.id || crypto.randomUUID()),
+      word,
+      normalized,
+      translation,
+      meanings: sanitizeMeanings(raw.meanings, translation),
+      definitions: sanitizeDefinitions(raw.definitions),
+      provider: String(raw.provider || raw.source || (raw.sl || raw.tl ? `${raw.sl || "?"}->${raw.tl || "?"}` : "import")).slice(0, 80),
+      context: String(raw.context || "").slice(0, 500),
+      sourceUrl: String(raw.sourceUrl || ""),
+      sourceTitle: String(raw.sourceTitle || ""),
+      createdAt: raw.createdAt || new Date().toISOString(),
+      updatedAt: raw.updatedAt || raw.createdAt || new Date().toISOString(),
+      timesSeen: Number.isFinite(Number(raw.timesSeen)) ? Number(raw.timesSeen) : 1
+    };
+    const old = seen.get(normalized);
+    if (!old || new Date(item.updatedAt) > new Date(old.updatedAt)) {
+      seen.set(normalized, item);
+    }
+  }
+  return [...seen.values()].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+}
+
+function mergeDecks(localDeck, remoteDeck) {
+  return sanitizeDeck([...(remoteDeck || []), ...(localDeck || [])]);
+}
+
+function normalizeIconLabel(input) {
+  const text = String(input || "VI").trim();
+  const cleaned = text.replace(/\s+/g, "").slice(0, 3);
+  return cleaned || "VI";
+}
+
+function normalizeWord(input) {
+  const text = String(input || "")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .trim();
+  const match = text.match(/[A-Za-z][A-Za-z'’-]{0,48}/);
+  if (!match) return "";
+  return match[0].replace(/[’]/g, "'");
+}
+
+async function broadcastDeckChanged() {
+  const deck = await getDeck();
+  chrome.runtime.sendMessage({ type: "DECK_CHANGED", deck }).catch(() => {});
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id || !isInjectableUrl(tab.url)) continue;
+    chrome.tabs.sendMessage(tab.id, { type: "DECK_CHANGED", deck }).catch(() => {});
+  }
+}
+
+async function broadcastSettingsChanged() {
+  const settings = await getSettings();
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id || !isInjectableUrl(tab.url)) continue;
+    chrome.tabs.sendMessage(tab.id, { type: "SETTINGS_CHANGED", settings }).catch(() => {});
+  }
+}
+
+function isInjectableUrl(url = "") {
+  return /^https?:\/\//i.test(url);
+}
+
+async function getGoogleAccessToken(interactive = true) {
+  const stored = await chrome.storage.local.get([
+    STORAGE_KEYS.GOOGLE_TOKEN,
+    STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT
+  ]);
+  const token = stored[STORAGE_KEYS.GOOGLE_TOKEN];
+  const expiresAt = Number(stored[STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT] || 0);
+  if (token && Date.now() < expiresAt - 60_000) return token;
+
+  if (!interactive) throw new Error("Google login required");
+
+  const settings = await getSettings();
+  const clientId = String(settings.googleClientId || "").trim();
+  if (!clientId || !clientId.endsWith(".apps.googleusercontent.com")) {
+    throw new Error("Missing Google OAuth Client ID. Open Options and paste your client ID first.");
+  }
+
+  const redirectUri = chrome.identity.getRedirectURL("oauth2");
+  const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  authUrl.searchParams.set("client_id", clientId);
+  authUrl.searchParams.set("response_type", "token");
+  authUrl.searchParams.set("redirect_uri", redirectUri);
+  authUrl.searchParams.set("scope", DRIVE_SCOPE);
+  authUrl.searchParams.set("include_granted_scopes", "true");
+  authUrl.searchParams.set("prompt", "consent");
+
+  const responseUrl = await chrome.identity.launchWebAuthFlow({
+    url: authUrl.toString(),
+    interactive: true
+  });
+
+  if (!responseUrl) throw new Error("OAuth flow did not return a URL");
+  const parsed = new URL(responseUrl);
+  const hash = new URLSearchParams(parsed.hash.replace(/^#/, ""));
+  const error = hash.get("error");
+  if (error) throw new Error(`Google OAuth error: ${error}`);
+
+  const accessToken = hash.get("access_token");
+  const expiresIn = Number(hash.get("expires_in") || 3600);
+  if (!accessToken) throw new Error("No Google access token returned");
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.GOOGLE_TOKEN]: accessToken,
+    [STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT]: Date.now() + expiresIn * 1000
+  });
+  return accessToken;
+}
+
+async function clearGoogleToken() {
+  const data = await chrome.storage.local.get(STORAGE_KEYS.GOOGLE_TOKEN);
+  const token = data[STORAGE_KEYS.GOOGLE_TOKEN];
+  if (token) {
+    try {
+      await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" }
+      });
+    } catch (_) {}
+  }
+  await chrome.storage.local.remove([
+    STORAGE_KEYS.GOOGLE_TOKEN,
+    STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT
+  ]);
+}
+
+async function driveFetch(path, options = {}) {
+  const token = await getGoogleAccessToken(true);
+  const headers = new Headers(options.headers || {});
+  headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(path, { ...options, headers });
+  if (response.status === 401) {
+    await clearGoogleToken();
+    throw new Error("Google token expired. Please sync again and login.");
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Google Drive API failed ${response.status}: ${text.slice(0, 300)}`);
+  }
+  return response;
+}
+
+async function findDriveDeckFile() {
+  const q = encodeURIComponent(`name='${DRIVE_DECK_FILE_NAME}'`);
+  const fields = encodeURIComponent("files(id,name,modifiedTime)");
+  const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${q}&fields=${fields}&pageSize=1`;
+  const response = await driveFetch(url);
+  const data = await response.json();
+  return data?.files?.[0] || null;
+}
+
+async function downloadDriveDeck(fileId) {
+  if (!fileId) return [];
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
+  const response = await driveFetch(url);
+  const text = await response.text();
+  if (!text.trim()) return [];
+  const parsed = JSON.parse(text);
+  if (Array.isArray(parsed)) return sanitizeDeck(parsed);
+  return sanitizeDeck(parsed.deck || []);
+}
+
+async function uploadDriveDeck(deck, existingFileId = null) {
+  const metadata = existingFileId
+    ? { name: DRIVE_DECK_FILE_NAME, mimeType: "application/json" }
+    : { name: DRIVE_DECK_FILE_NAME, parents: ["appDataFolder"], mimeType: "application/json" };
+  const content = JSON.stringify({ deck: sanitizeDeck(deck), updatedAt: new Date().toISOString() }, null, 2);
+  const boundary = `worddeck_boundary_${Date.now()}`;
+  const body = [
+    `--${boundary}`,
+    "Content-Type: application/json; charset=UTF-8",
+    "",
+    JSON.stringify(metadata),
+    `--${boundary}`,
+    "Content-Type: application/json; charset=UTF-8",
+    "",
+    content,
+    `--${boundary}--`,
+    ""
+  ].join("\r\n");
+
+  const url = existingFileId
+    ? `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(existingFileId)}?uploadType=multipart`
+    : "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
+
+  const response = await driveFetch(url, {
+    method: existingFileId ? "PATCH" : "POST",
+    headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+    body
+  });
+  return response.json();
+}
+
+async function syncDeckWithGoogleDrive() {
+  const localDeck = await getDeck();
+  const remoteFile = await findDriveDeckFile();
+  const remoteDeck = remoteFile ? await downloadDriveDeck(remoteFile.id) : [];
+  const mergedDeck = mergeDecks(localDeck, remoteDeck);
+  const uploaded = await uploadDriveDeck(mergedDeck, remoteFile?.id || null);
+  await setDeck(mergedDeck);
+  return {
+    deck: mergedDeck,
+    localCountBefore: localDeck.length,
+    remoteCountBefore: remoteDeck.length,
+    mergedCount: mergedDeck.length,
+    driveFileId: uploaded?.id || remoteFile?.id || null
+  };
+}
