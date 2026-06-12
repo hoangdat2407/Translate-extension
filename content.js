@@ -118,29 +118,51 @@ function installShadowUi() {
       .hidden { display: none !important; }
       #selectionIcon {
         position: fixed;
-        min-width: 34px;
+        width: 34px;
         height: 34px;
-        padding: 0 10px;
-        border: 0;
-        border-radius: 10px;
-        background: linear-gradient(135deg, #27c7b8, #14b8a6);
+        padding: 0;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        border-radius: 50%;
+        background: linear-gradient(135deg, #2dd4bf, #14b8a6);
         color: white;
-        box-shadow: 0 12px 28px rgba(20, 184, 166, .38), 0 3px 9px rgba(0,0,0,.18);
+        box-shadow: 0 6px 16px rgba(20, 184, 166, 0.22), 0 2px 6px rgba(0, 0, 0, 0.08);
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        gap: 4px;
         cursor: pointer;
         user-select: none;
         pointer-events: auto;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        font-size: 12px;
-        font-weight: 900;
-        letter-spacing: -.02em;
-        transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease;
+        transition: transform .15s cubic-bezier(0.4, 0, 0.2, 1), box-shadow .15s cubic-bezier(0.4, 0, 0.2, 1), border-color .15s ease, opacity .15s ease;
       }
-      #selectionIcon:hover { transform: translateY(-1px) scale(1.03); box-shadow: 0 16px 32px rgba(20, 184, 166, .42), 0 4px 12px rgba(0,0,0,.18); }
-      #selectionIcon .spark { font-size: 14px; line-height: 1; }
+      #selectionIcon:hover {
+        transform: translateY(-1px) scale(1.06);
+        border-color: rgba(255, 255, 255, 0.75);
+        box-shadow: 0 10px 22px rgba(20, 184, 166, 0.32), 0 3px 8px rgba(0, 0, 0, 0.12);
+      }
+      #selectionIcon img {
+        width: 20px;
+        height: 20px;
+        object-fit: contain;
+        transition: transform .15s ease;
+      }
+      #selectionIcon:hover img {
+        transform: scale(1.05);
+      }
+      #selectionIcon.has-custom-icon {
+        background: #ffffff;
+        border: 1px solid rgba(0, 0, 0, 0.06);
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+      }
+      #selectionIcon.has-custom-icon:hover {
+        border-color: rgba(0, 0, 0, 0.12);
+        box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12), 0 3px 8px rgba(0, 0, 0, 0.06);
+      }
+      #selectionIcon.has-custom-icon img {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        object-fit: cover;
+      }
 
       #panel {
         position: fixed;
@@ -286,7 +308,7 @@ function installShadowUi() {
       .error .check { background: #fb7185; }
       .error #panelTranslation { color: #be123c; }
     </style>
-    <button id="selectionIcon" class="hidden" type="button" title="Dịch và tự lưu vào WordDeck"><span class="spark">☻</span><span id="iconLabel">VI</span></button>
+    <button id="selectionIcon" class="hidden" type="button" title="Dịch và tự lưu vào WordDeck"><img class="spark-img" src="${chrome.runtime.getURL('icon/image.png')}" alt="Logo" /></button>
     <section id="panel" class="hidden" role="dialog" aria-label="WordDeck translation">
       <div class="bar">
         <button id="settingsBtn" class="icon-btn" title="Mở cài đặt WordDeck">⚙</button>
@@ -411,14 +433,21 @@ function showSelectionIcon(selectionInfo) {
   applySelectionIconSettings();
 
   const rect = selectionInfo.rect || { left: lastPointer.x, right: lastPointer.x, top: lastPointer.y, bottom: lastPointer.y, width: 1, height: 1 };
-  const iconWidth = Math.max(34, 22 + getSelectionIconLabel().length * 8);
+  const iconWidth = 34;
   const iconHeight = 34;
-  const margin = 7;
-  let left = rect.right + margin;
+  const margin = 6;
+  
+  // Center horizontally under the selected text
+  let left = rect.left + rect.width / 2 - iconWidth / 2;
   let top = rect.bottom + margin;
 
-  if (left + iconWidth + 8 > window.innerWidth) left = Math.max(8, rect.left - iconWidth - margin);
-  if (top + iconHeight + 8 > window.innerHeight) top = Math.max(8, rect.top - iconHeight - margin);
+  // Bound checks to prevent the icon from going off-screen
+  if (left + iconWidth + 8 > window.innerWidth) left = window.innerWidth - iconWidth - 8;
+  if (left < 8) left = 8;
+
+  if (top + iconHeight + 8 > window.innerHeight) {
+    top = Math.max(8, rect.top - iconHeight - margin);
+  }
 
   icon.style.left = `${Math.round(left)}px`;
   icon.style.top = `${Math.round(top)}px`;
@@ -433,6 +462,18 @@ function getSelectionIconLabel() {
 function applySelectionIconSettings() {
   const label = uiRoot?.getElementById("iconLabel");
   if (label) label.textContent = getSelectionIconLabel();
+
+  const iconImg = uiRoot?.querySelector("#selectionIcon img");
+  const iconBtn = uiRoot?.getElementById("selectionIcon");
+  if (iconImg && iconBtn) {
+    if (settings.customIconDataUrl) {
+      iconImg.src = settings.customIconDataUrl;
+      iconBtn.classList.add("has-custom-icon");
+    } else {
+      iconImg.src = chrome.runtime.getURL("icon/image.png");
+      iconBtn.classList.remove("has-custom-icon");
+    }
+  }
 }
 
 function hideSelectionIcon() {

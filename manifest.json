@@ -20,7 +20,19 @@
   },
   "action": {
     "default_title": "WordDeck Translator",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon/image.png",
+      "32": "icon/image.png",
+      "48": "icon/image.png",
+      "128": "icon/image.png"
+    }
+  },
+  "icons": {
+    "16": "icon/image.png",
+    "32": "icon/image.png",
+    "48": "icon/image.png",
+    "128": "icon/image.png"
   },
   "content_scripts": [
     {
@@ -36,5 +48,15 @@
       "run_at": "document_idle"
     }
   ],
-  "options_page": "options.html"
+  "options_page": "options.html",
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icon/image.png"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
 }

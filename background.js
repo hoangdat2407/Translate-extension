@@ -24,7 +24,8 @@ const DEFAULT_SETTINGS = {
   translationProvider: "gemini", // gemini | dictionary
   highlightEnabled: true,
   autoSaveOnDoubleClick: true,
-  selectionIconLabel: "VI"
+  selectionIconLabel: "VI",
+  customIconDataUrl: ""
 };
 
 const DRIVE_DECK_FILE_NAME = "worddeck-translator-deck.json";
@@ -151,6 +152,7 @@ function normalizeSettings(settings) {
   settings.highlightEnabled = settings.highlightEnabled !== false;
   settings.autoSaveOnDoubleClick = Boolean(settings.autoSaveOnDoubleClick);
   settings.selectionIconLabel = normalizeIconLabel(settings.selectionIconLabel || "VI");
+  settings.customIconDataUrl = typeof settings.customIconDataUrl === "string" ? settings.customIconDataUrl : "";
   settings.geminiApiKey = String(settings.geminiApiKey || "").trim();
   settings.geminiModel = normalizeGeminiModel(settings.geminiModel);
   settings.translationProvider = ["gemini", "dictionary"].includes(settings.translationProvider) ? settings.translationProvider : "gemini";

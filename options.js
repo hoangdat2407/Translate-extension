@@ -13,8 +13,15 @@ const els = {
   autoSaveOnDoubleClick: document.getElementById("autoSaveOnDoubleClick"),
   clickMode: document.getElementById("clickMode"),
   save: document.getElementById("save"),
-  status: document.getElementById("status")
+  status: document.getElementById("status"),
+  customIconFile: document.getElementById("customIconFile"),
+  uploadIconButton: document.getElementById("uploadIconButton"),
+  removeIconButton: document.getElementById("removeIconButton"),
+  customIconPreviewContainer: document.getElementById("customIconPreviewContainer"),
+  customIconPreview: document.getElementById("customIconPreview")
 };
+
+let customIconDataUrl = "";
 
 init();
 
@@ -34,6 +41,50 @@ async function init() {
   els.clickMode.value = settings.clickMode || "single";
   els.redirectUri.value = state.redirectUri || chrome.identity.getRedirectURL("oauth2");
 
+  // Load custom icon configuration
+  customIconDataUrl = settings.customIconDataUrl || "";
+  if (customIconDataUrl) {
+    els.customIconPreview.src = customIconDataUrl;
+    els.customIconPreviewContainer.classList.remove("default-preview");
+    els.removeIconButton.classList.remove("hidden");
+  } else {
+    els.customIconPreview.src = "icon/image.png";
+    els.customIconPreviewContainer.classList.add("default-preview");
+    els.removeIconButton.classList.add("hidden");
+  }
+
+  // Bind custom icon events
+  els.uploadIconButton.addEventListener("click", () => {
+    els.customIconFile.click();
+  });
+
+  els.customIconFile.addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    try {
+      els.status.textContent = "Đang xử lý ảnh...";
+      const resizedUrl = await resizeImageToDataUrl(file);
+      customIconDataUrl = resizedUrl;
+      els.customIconPreview.src = customIconDataUrl;
+      els.customIconPreviewContainer.classList.remove("default-preview");
+      els.removeIconButton.classList.remove("hidden");
+      els.status.textContent = "Đã tải ảnh lên.";
+      setTimeout(() => (els.status.textContent = ""), 1500);
+    } catch (err) {
+      els.status.textContent = "Lỗi: " + err.message;
+      setTimeout(() => (els.status.textContent = ""), 3000);
+    }
+  });
+
+  els.removeIconButton.addEventListener("click", () => {
+    customIconDataUrl = "";
+    els.customIconFile.value = "";
+    els.customIconPreview.src = "icon/image.png";
+    els.customIconPreviewContainer.classList.add("default-preview");
+    els.removeIconButton.classList.add("hidden");
+  });
+
   els.copyRedirect.addEventListener("click", async () => {
     await navigator.clipboard.writeText(els.redirectUri.value);
     els.status.textContent = "Đã copy Redirect URI.";
@@ -41,6 +92,42 @@ async function init() {
   });
 
   els.save.addEventListener("click", saveSettings);
+}
+
+function resizeImageToDataUrl(file, maxWidth = 128, maxHeight = 128) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = function(event) {
+      const img = new Image();
+      img.onload = function() {
+        const canvas = document.createElement("canvas");
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxWidth) {
+            height *= maxWidth / width;
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width *= maxHeight / height;
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.onerror = () => reject(new Error("Không thể load ảnh"));
+      img.src = event.target.result;
+    };
+    reader.onerror = () => reject(new Error("Không thể đọc file"));
+    reader.readAsDataURL(file);
+  });
 }
 
 async function saveSettings() {
@@ -60,7 +147,8 @@ async function saveSettings() {
         clickTranslateEnabled: els.clickTranslateEnabled.checked,
         highlightEnabled: els.highlightEnabled.checked,
         autoSaveOnDoubleClick: els.autoSaveOnDoubleClick.checked,
-        clickMode: els.clickMode.value
+        clickMode: els.clickMode.value,
+        customIconDataUrl: customIconDataUrl
       }
     });
     els.status.textContent = "Đã lưu.";
