@@ -118,195 +118,201 @@ function installShadowUi() {
       .hidden { display: none !important; }
       #selectionIcon {
         position: fixed;
-        width: 34px;
-        height: 34px;
+        width: 32px;
+        height: 32px;
         padding: 0;
-        border: 1px solid rgba(255, 255, 255, 0.4);
-        border-radius: 50%;
-        background: linear-gradient(135deg, #2dd4bf, #14b8a6);
-        color: white;
-        box-shadow: 0 6px 16px rgba(20, 184, 166, 0.22), 0 2px 6px rgba(0, 0, 0, 0.08);
+        border: 1px solid #0d9488;
+        border-radius: 6px;
+        background: #0d9488;
+        color: #ffffff;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
         display: inline-flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
         user-select: none;
         pointer-events: auto;
-        transition: transform .15s cubic-bezier(0.4, 0, 0.2, 1), box-shadow .15s cubic-bezier(0.4, 0, 0.2, 1), border-color .15s ease, opacity .15s ease;
+        transition: all 0.12s ease;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
       }
       #selectionIcon:hover {
-        transform: translateY(-1px) scale(1.06);
-        border-color: rgba(255, 255, 255, 0.75);
-        box-shadow: 0 10px 22px rgba(20, 184, 166, 0.32), 0 3px 8px rgba(0, 0, 0, 0.12);
+        background: #0f766e;
+        border-color: #0f766e;
       }
       #selectionIcon img {
-        width: 20px;
-        height: 20px;
+        width: 18px;
+        height: 18px;
         object-fit: contain;
-        transition: transform .15s ease;
+        filter: brightness(0) invert(1);
+        transition: transform .12s ease;
       }
       #selectionIcon:hover img {
         transform: scale(1.05);
       }
       #selectionIcon.has-custom-icon {
         background: #ffffff;
-        border: 1px solid rgba(0, 0, 0, 0.06);
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+        border: 1px solid #e4e4e7;
       }
       #selectionIcon.has-custom-icon:hover {
-        border-color: rgba(0, 0, 0, 0.12);
-        box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12), 0 3px 8px rgba(0, 0, 0, 0.06);
+        border-color: #d4d4d8;
       }
       #selectionIcon.has-custom-icon img {
         width: 100%;
         height: 100%;
-        border-radius: 50%;
+        border-radius: 5px;
         object-fit: cover;
+        filter: none;
       }
 
       #panel {
         position: fixed;
-        width: 440px;
+        width: 380px;
         max-width: calc(100vw - 18px);
-        border: 1px solid rgba(15, 118, 110, .34);
-        border-radius: 12px;
+        border: 1px solid #e4e4e7;
+        border-radius: 8px;
         overflow: hidden;
         background: #ffffff;
-        color: #0f172a;
-        box-shadow: 0 20px 52px rgba(15, 23, 42, .24);
+        color: #18181b;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
         pointer-events: auto;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       .bar {
-        min-height: 38px;
-        background: linear-gradient(90deg, #2dd4bf, #14b8a6);
-        color: #ffffff;
+        min-height: 34px;
+        background: #f4f4f5;
+        border-bottom: 1px solid #e4e4e7;
+        color: #27272a;
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 6px 9px;
+        padding: 5px 10px;
       }
       .icon-btn, .close {
-        width: 26px;
-        height: 26px;
+        padding: 2px 6px;
+        height: 20px;
         border: 0;
-        border-radius: 999px;
-        background: rgba(255,255,255,.18);
-        color: white;
+        border-radius: 4px;
+        background: transparent;
+        color: #71717a;
         cursor: pointer;
-        font-weight: 900;
+        font-weight: 500;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        line-height: 1;
-        transition: transform .12s ease, background .12s ease;
+        font-size: 11px;
+        transition: all 0.12s ease;
       }
-      .icon-btn:hover, .close:hover { transform: translateY(-1px); background: rgba(255,255,255,.28); }
-      .close { margin-left: auto; font-size: 20px; background: transparent; }
+      .icon-btn:hover, .close:hover { background: #e4e4e7; color: #18181b; }
+      .close { margin-left: auto; font-size: 16px; width: auto; height: auto; }
       .lang-pill {
-        height: 24px;
-        min-width: 54px;
-        border-radius: 7px;
-        border: 1px solid rgba(255,255,255,.5);
-        background: #ffffff;
+        height: 20px;
+        min-width: 42px;
+        border-radius: 4px;
+        border: 1px solid #ccfbf1;
+        background: #f0fdfa;
         color: #0f766e;
-        font-size: 12px;
-        font-weight: 900;
-        padding: 2px 9px;
+        font-size: 11px;
+        font-weight: 500;
+        padding: 1px 6px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
       }
-      .arrow { font-weight: 900; opacity: .95; }
-      .body { padding: 11px 14px 13px; background: #fff; }
+      .arrow { font-weight: 500; color: #a1a1aa; }
+      .body { padding: 12px 14px; background: #ffffff; }
       .brand {
         display: flex;
         align-items: center;
-        gap: 9px;
-        color: #334155;
-        font-size: 16px;
-        font-style: italic;
-        margin-bottom: 9px;
+        gap: 6px;
+        color: #71717a;
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 8px;
       }
       .review-btn {
-        width: 27px;
-        height: 27px;
-        border: 1px solid #99f6e4;
-        background: #ecfeff;
-        color: #14b8a6;
-        border-radius: 999px;
+        padding: 2px 6px;
+        height: 20px;
+        border: 1px solid #ccfbf1;
+        background: #f0fdfa;
+        color: #0f766e;
+        border-radius: 4px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 12px;
+        font-size: 10px;
         cursor: pointer;
+        transition: all 0.12s ease;
       }
-      .review-btn:hover { filter: brightness(.98); transform: translateY(-1px); }
-      .divider { border-top: 1px dotted #9ca3af; margin: 0 -14px 10px; }
+      .review-btn:hover { background: #ccfbf1; }
+      .divider { border-top: 1px solid #f4f4f5; margin: 0 -14px 10px; }
       .result {
         display: grid;
-        grid-template-columns: 1fr 40px;
+        grid-template-columns: 1fr 32px;
         gap: 12px;
         align-items: start;
         min-height: 50px;
       }
       .word-row { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
-      .bullet { color: #0f172a; font-weight: 900; }
-      #panelWord { font-size: 16px; font-weight: 900; color: #0f172a; overflow-wrap: anywhere; }
-      #panelTranslation { margin: 2px 0 0 18px; color: #0f766e; font-size: 14px; font-style: italic; overflow-wrap: anywhere; }
-      #panelMeanings { margin: 8px 0 0 18px; display: flex; flex-wrap: wrap; gap: 6px; }
-      .meaning-chip { max-width: 100%; border-radius: 999px; background: #ecfeff; border: 1px solid #99f6e4; color: #0f766e; padding: 4px 8px; font-size: 12px; font-weight: 800; overflow-wrap: anywhere; }
-      #panelDefinitions { margin: 9px 0 0 18px; color: #475569; font-size: 13px; line-height: 1.45; }
+      .bullet { color: #a1a1aa; font-weight: 500; }
+      #panelWord { font-size: 15px; font-weight: 600; color: #18181b; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      #panelTranslation { margin: 4px 0 0 0; color: #0d9488; font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+      #panelMeanings { margin: 8px 0 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+      .meaning-chip { max-width: 100%; border-radius: 4px; background: #f0fdfa; border: 1px solid #ccfbf1; color: #0f766e; padding: 2px 6px; font-size: 11px; font-weight: 500; overflow-wrap: anywhere; }
+      #panelDefinitions { margin: 8px 0 0 0; color: #52525b; font-size: 12px; line-height: 1.45; }
       .definition-line { margin-top: 5px; }
-      .pos { color: #0f766e; font-weight: 900; }
+      .pos { color: #0f766e; font-weight: 600; font-family: ui-monospace, monospace; font-size: 11px; }
       .check {
-        width: 34px;
-        height: 34px;
-        border: 0;
-        border-radius: 999px;
-        background: #2dd4bf;
-        color: white;
-        font-size: 19px;
-        font-weight: 900;
+        width: 32px;
+        height: 32px;
+        border: 1px solid #ccfbf1;
+        border-radius: 6px;
+        background: #f0fdfa;
+        color: #0d9488;
+        font-size: 16px;
+        font-weight: 500;
         display: inline-flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
-        box-shadow: 0 6px 16px rgba(20,184,166,.28);
+        transition: all 0.12s ease;
       }
-      .check:hover { transform: translateY(-1px); }
+      .check:hover { background: #ccfbf1; color: #0f766e; }
       .auto {
         display: inline-flex;
         align-items: center;
         gap: 6px;
         margin-top: 10px;
-        color: #0f766e;
-        font-size: 12px;
-        font-weight: 900;
+        color: #0d9488;
+        font-size: 11px;
+        font-weight: 500;
       }
       .auto-dot {
-        width: 15px;
-        height: 15px;
+        width: 14px;
+        height: 14px;
         border-radius: 4px;
-        background: #2dd4bf;
+        background: #0d9488;
         color: #ffffff;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 11px;
-        font-weight: 900;
+        font-size: 9px;
+        font-weight: 600;
       }
       .note {
         margin: 8px -14px -13px;
-        padding: 9px 14px;
-        background: #fff7df;
-        border-top: 1px solid #f8d77b;
-        color: #6b4e00;
-        font-size: 12px;
+        padding: 8px 14px;
+        background: #fafafa;
+        border-top: 1px solid #e4e4e7;
+        color: #71717a;
+        font-size: 11px;
         line-height: 1.4;
       }
-      .error .check { background: #fb7185; }
-      .error #panelTranslation { color: #be123c; }
+      .error .check { background: #fef2f2; border-color: #fca5a5; color: #b91c1c; }
+      .error #panelTranslation { color: #b91c1c; }
     </style>
     <button id="selectionIcon" class="hidden" type="button" title="Dịch và tự lưu vào WordDeck"><img class="spark-img" src="${chrome.runtime.getURL('icon/image.png')}" alt="Logo" /></button>
     <section id="panel" class="hidden" role="dialog" aria-label="WordDeck translation">
@@ -379,17 +385,11 @@ function installShadowUi() {
 }
 
 function openWordDeckOptions() {
-  try {
-    if (chrome.runtime.openOptionsPage) {
-      chrome.runtime.openOptionsPage();
-      return;
-    }
-  } catch (_) {}
-  try { window.open(chrome.runtime.getURL("options.html"), "_blank", "noopener"); } catch (_) {}
+  chrome.runtime.sendMessage({ type: "WORDDECK_OPEN_OPTIONS" });
 }
 
 function openWordDeckReview() {
-  try { window.open(chrome.runtime.getURL("review.html"), "_blank", "noopener"); } catch (_) {}
+  chrome.runtime.sendMessage({ type: "WORDDECK_OPEN_REVIEW" });
 }
 
 function preserveSelectionEvent(event) {

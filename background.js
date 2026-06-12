@@ -126,6 +126,14 @@ async function handleMessage(message, sender) {
       await broadcastDeckChanged();
       return { ok: true, ...result };
     }
+    case "WORDDECK_OPEN_OPTIONS": {
+      chrome.runtime.openOptionsPage();
+      return { ok: true };
+    }
+    case "WORDDECK_OPEN_REVIEW": {
+      chrome.tabs.create({ url: chrome.runtime.getURL("review.html") });
+      return { ok: true };
+    }
     default:
       throw new Error("Unknown message type");
   }
