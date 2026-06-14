@@ -14,6 +14,8 @@ const els = {
   syncGoogle: document.getElementById("syncGoogle"),
   logoutGoogle: document.getElementById("logoutGoogle"),
   syncStatus: document.getElementById("syncStatus"),
+  translateClipboard: document.getElementById("translateClipboard"),
+  clipboardStatus: document.getElementById("clipboardStatus"),
   search: document.getElementById("search"),
   openReview: document.getElementById("openReview"),
   exportDeck: document.getElementById("exportDeck"),
@@ -47,6 +49,10 @@ function bindEvents() {
   els.clickMode.addEventListener("change", () => updateSettings({ clickMode: els.clickMode.value }));
   els.search.addEventListener("input", renderDeck);
   els.openReview.addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("review.html") }));
+  if (els.translateClipboard) {
+    els.translateClipboard.addEventListener("click", translateClipboardAndSave);
+  }
+
 
   els.syncGoogle.addEventListener("click", async () => {
     els.syncGoogle.disabled = true;
@@ -101,6 +107,78 @@ function bindEvents() {
   });
 }
 
+
+async function translateClipboardAndSave() {
+  if (!els.translateClipboard) return;
+  els.translateClipboard.disabled = true;
+  if (els.clipboardStatus) els.clipboardStatus.textContent = "Đang đọc clipboard...";
+
+  try {
+    const raw = await navigator.clipboard.readText();
+    const word = normalizeClipboardText(raw);
+    if (!word) {
+      throw new Error("Clipboard chưa có từ/cụm tiếng Anh hợp lệ. Trong PDF: bôi đen → Ctrl+C → bấm lại.");
+    }
+
+    if (els.clipboardStatus) els.clipboardStatus.textContent = `Đang dịch: ${word}`;
+
+    const translated = await sendMessage({ type: "TRANSLATE_WORD", word });
+    let entry = translated.entry || null;
+
+    if (!translated.fromDeck) {
+      const saved = await sendMessage({
+        type: "SAVE_WORD",
+        payload: {
+          word: translated.word || word,
+          translation: translated.translation,
+          meanings: translated.meanings || [],
+          definitions: translated.definitions || [],
+          provider: translated.provider || "clipboard",
+          context: raw.slice(0, 500),
+          sourceTitle: "Clipboard / PDF"
+        }
+      });
+      entry = saved.entry || null;
+      deck = saved.deck || deck;
+    }
+
+    if (els.clipboardStatus) {
+      const meaning = entry?.translation || translated.translation || "";
+      els.clipboardStatus.textContent = `${translated.fromDeck ? "Đã có trong deck" : "Đã dịch và lưu"}: ${word}${meaning ? " → " + meaning : ""}`;
+    }
+
+    els.search.value = word;
+    render();
+  } catch (error) {
+    if (els.clipboardStatus) els.clipboardStatus.textContent = error.message || "Không đọc được clipboard.";
+  } finally {
+    els.translateClipboard.disabled = false;
+  }
+}
+
+function normalizeClipboardText(input) {
+  let text = String(input || "")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .replace(/[^A-Za-z0-9_'’.\-/\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  text = text.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");
+  if (!/[A-Za-z]/.test(text)) return "";
+
+  const words = text.split(/\s+/).filter(Boolean).slice(0, 12);
+  let phrase = words.join(" ");
+
+  if (phrase.length > 120) {
+    phrase = phrase.slice(0, 120).replace(/\s+\S*$/, "").trim() || phrase.slice(0, 120).trim();
+  }
+
+  return phrase.replace(/[’]/g, "'");
+}
+
+
 async function updateSettings(patch) {
   const result = await sendMessage({ type: "UPDATE_SETTINGS", patch });
   settings = result.settings || settings;
@@ -144,58 +222,124 @@ function renderDeck() {
 
   for (const item of visible) {
     const card = document.createElement("article");
-    card.className = "card";
+    card.className = "vocab-card";
 
-    const head = document.createElement("div");
-    head.className = "card-head";
+    const top = document.createElement("div");
+    top.className = "vocab-top";
 
     const wordBox = document.createElement("div");
+    wordBox.className = "vocab-main";
+
     const word = document.createElement("div");
-    word.className = "word";
+    word.className = "vocab-word";
     word.textContent = item.word;
+
     const translation = document.createElement("div");
-    translation.className = "translation";
+    translation.className = "vocab-translation";
     translation.textContent = item.translation;
+
     wordBox.append(word, translation);
-
-    const meaningItems = uniqueTexts(item.meanings || []).filter((x) => x.toLowerCase() !== String(item.translation || "").toLowerCase()).slice(0, 5);
-    if (meaningItems.length) {
-      const meanings = document.createElement("div");
-      meanings.className = "meanings";
-      for (const text of meaningItems) {
-        const chip = document.createElement("span");
-        chip.className = "meaning-chip";
-        chip.textContent = text;
-        meanings.appendChild(chip);
-      }
-      wordBox.appendChild(meanings);
-    }
-
-    const definitionItems = Array.isArray(item.definitions) ? item.definitions.slice(0, 2) : [];
-    if (definitionItems.length) {
-      const defs = document.createElement("div");
-      defs.className = "defs";
-      defs.textContent = definitionItems.map((d) => `${d.partOfSpeech ? d.partOfSpeech + ": " : ""}${d.viDefinition || d.definition}`).join(" · ");
-      wordBox.appendChild(defs);
-    }
 
     const del = document.createElement("button");
     del.className = "delete";
+    del.type = "button";
     del.textContent = "Xóa";
+    del.title = `Xóa ${item.word}`;
     del.addEventListener("click", async () => {
-      const result = await sendMessage({ type: "DELETE_WORD", normalized: item.normalized });
-      deck = result.deck || [];
-      render();
+      del.disabled = true;
+      try {
+        const result = await sendMessage({
+          type: "DELETE_WORD",
+          id: item.id,
+          normalized: item.normalized,
+          word: item.word
+        });
+        deck = result.deck || [];
+        render();
+      } catch (error) {
+        alert(error.message || "Xóa từ lỗi");
+        del.disabled = false;
+      }
     });
 
-    head.append(wordBox, del);
-    card.appendChild(head);
+    top.append(wordBox, del);
+    card.appendChild(top);
 
-    if (item.context) {
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.textContent = item.context;
-      card.appendChild(meta);
+    const meaningItems = uniqueTexts(item.meanings || [])
+      .filter((x) => x.toLowerCase() !== String(item.translation || "").toLowerCase())
+      .slice(0, 4);
+
+    if (meaningItems.length) {
+      const meanings = document.createElement("div");
+      meanings.className = "vocab-meanings";
+      for (const value of meaningItems) {
+        const chip = document.createElement("span");
+        chip.className = "vocab-chip";
+        chip.textContent = value;
+        meanings.appendChild(chip);
+      }
+      card.appendChild(meanings);
+    }
+
+    const definitionItems = Array.isArray(item.definitions)
+      ? item.definitions.filter((d) => d && (d.viDefinition || d.definition || d.example || d.exampleVi)).slice(0, 2)
+      : [];
+
+    if (definitionItems.length) {
+      const defs = document.createElement("div");
+      defs.className = "vocab-defs";
+      for (const d of definitionItems) {
+        const box = document.createElement("div");
+        box.className = "vocab-def";
+
+        const head = document.createElement("div");
+        head.className = "vocab-def-head";
+
+        const pos = String(d.partOfSpeech || "").trim();
+        const viText = String(d.viDefinition || d.definition || "").trim();
+        const example = String(d.exampleVi || d.example || "").trim();
+
+        if (pos) {
+          const posEl = document.createElement("span");
+          posEl.className = "vocab-pos";
+          posEl.textContent = pos;
+          head.appendChild(posEl);
+        }
+
+        if (viText) {
+          const defText = document.createElement("span");
+          defText.className = "vocab-def-text";
+          defText.textContent = viText;
+          head.appendChild(defText);
+        }
+
+        if (head.childNodes.length) box.appendChild(head);
+
+        if (example) {
+          const exampleEl = document.createElement("div");
+          exampleEl.className = "vocab-example";
+          exampleEl.textContent = example;
+          box.appendChild(exampleEl);
+        }
+
+        defs.appendChild(box);
+      }
+      card.appendChild(defs);
+    }
+
+    const noteText = String(item.noteVi || "").trim();
+    if (noteText) {
+      const note = document.createElement("div");
+      note.className = "vocab-note";
+      note.textContent = noteText;
+      card.appendChild(note);
+    }
+
+    if (item.sourceTitle) {
+      const source = document.createElement("div");
+      source.className = "vocab-source";
+      source.textContent = item.sourceTitle;
+      card.appendChild(source);
     }
 
     els.deckList.appendChild(card);

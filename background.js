@@ -5,13 +5,8 @@ const STORAGE_KEYS = {
   GOOGLE_TOKEN_EXPIRES_AT: "googleTokenExpiresAt"
 };
 
-const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
-const GEMINI_FALLBACK_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
-  "gemini-2.0-flash",
-  "gemini-2.0-flash-lite"
-];
+
+const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash-lite";
 
 const DEFAULT_SETTINGS = {
   selectionIconEnabled: true,
@@ -89,12 +84,19 @@ async function handleMessage(message, sender) {
       return { ok: true, entry, deck: await getDeck() };
     }
     case "DELETE_WORD": {
-      const normalized = String(message.normalized || "").toLowerCase();
       const deck = await getDeck();
-      const nextDeck = deck.filter((item) => item.normalized !== normalized);
+      const targets = buildDeleteTargets(message);
+      if (!targets.size) throw new Error("Missing word to delete");
+
+      const nextDeck = deck.filter((item) => !matchesDeleteTarget(item, targets));
       await setDeck(nextDeck);
       await broadcastDeckChanged();
-      return { ok: true, deck: nextDeck };
+
+      return {
+        ok: true,
+        deck: nextDeck,
+        removedCount: deck.length - nextDeck.length
+      };
     }
     case "CLEAR_DECK": {
       await setDeck([]);
@@ -139,6 +141,60 @@ async function handleMessage(message, sender) {
   }
 }
 
+
+function buildDeleteTargets(message = {}) {
+  const values = [
+    message.id,
+    message.normalized,
+    message.word,
+    message.term,
+    message.original,
+    message.entry?.id,
+    message.entry?.normalized,
+    message.entry?.word
+  ];
+
+  const targets = new Set();
+
+  for (const value of values) {
+    const raw = String(value || "").trim();
+    if (!raw) continue;
+
+    targets.add(raw.toLowerCase());
+
+    const normalized = normalizeWord(raw);
+    if (normalized) targets.add(normalized.toLowerCase());
+  }
+
+  return targets;
+}
+
+function matchesDeleteTarget(item, targets) {
+  if (!item || !targets?.size) return false;
+
+  const values = [
+    item.id,
+    item.normalized,
+    item.word,
+    item.o,
+    item.original,
+    item.term
+  ];
+
+  for (const value of values) {
+    const raw = String(value || "").trim();
+    if (!raw) continue;
+
+    if (targets.has(raw.toLowerCase())) return true;
+
+    const normalized = normalizeWord(raw);
+    if (normalized && targets.has(normalized.toLowerCase())) return true;
+  }
+
+  return false;
+}
+
+
 async function getDeck() {
   const data = await chrome.storage.local.get(STORAGE_KEYS.DECK);
   return Array.isArray(data[STORAGE_KEYS.DECK]) ? sanitizeDeck(data[STORAGE_KEYS.DECK]) : [];
@@ -172,8 +228,18 @@ function normalizeSettings(settings) {
 
 function normalizeGeminiModel(model) {
   const value = String(model || "").trim();
-  // Old builds used a bad/default placeholder model. Migrate silently so existing installs recover.
-  if (!value || value === "gemini-3.5-flash") return GEMINI_DEFAULT_MODEL;
+
+
+  if (
+    !value ||
+    value === "gemini-3.5-flash" ||
+    value === "gemini-2.5-flash" ||
+    value === "gemini-2.0-flash" ||
+    value === "gemini-2.0-flash-lite"
+  ) {
+    return GEMINI_DEFAULT_MODEL;
+  }
+
   return value;
 }
 
@@ -199,8 +265,7 @@ async function translateWordToVietnamese(word) {
       return await translateViaGemini(word, settings);
     } catch (error) {
       console.warn("Gemini translation failed, falling back", error);
-      const fallback = await translateViaDictionaryAndMemory(word);
-      return { ...fallback, provider: `${fallback.provider} · Gemini failed: ${(error?.message || "unknown").slice(0, 80)}` };
+      return await translateViaDictionaryAndMemory(word);
     }
   }
 
@@ -229,31 +294,20 @@ async function translateViaDictionaryAndMemory(word) {
 }
 
 async function translateViaGemini(word, settings) {
-  const requestedModel = normalizeGeminiModel(settings.geminiModel);
-  // 503 often means Google temporarily overloaded that model/region, not that the API key is wrong.
-  // Try a small/faster model next so personal use does not immediately fall back to weak translation.
-  const modelsToTry = uniqueClean([requestedModel, ...GEMINI_FALLBACK_MODELS]);
-  let lastError = null;
-
-  for (const modelName of modelsToTry) {
-    try {
-      return await translateViaGeminiModel(word, settings, modelName);
-    } catch (error) {
-      lastError = error;
-      console.warn("Gemini model failed", modelName, error);
-    }
-  }
-
-  throw lastError || new Error("Gemini failed");
+  const modelName = normalizeGeminiModel(settings.geminiModel);
+  return translateViaGeminiModel(word, settings, modelName);
 }
 
 async function translateViaGeminiModel(word, settings, modelName) {
   const prompt = `You are a compact English-Vietnamese vocabulary dictionary for a Vietnamese cybersecurity/IELTS learner.
 Analyze this English word or phrase: "${word}".
-Return ONLY a JSON object matching the schema. Do not use markdown. Do not add prose before/after JSON.
+Return ONLY one valid JSON object. Do not use markdown. Do not add prose before or after JSON.
+Use exactly these top-level keys: primary, meanings, definitions, notes.
 Meanings must be natural Vietnamese, context-aware, and common meanings first.
+Keep the output compact: max 5 meanings, max 3 definitions.
 For technical/security/legal meanings, mention the domain briefly in viDefinition or notes.
-If the phrase is a command, idiom, phrasal verb, or fixed expression, explain that instead of translating word-by-word.`;
+If the phrase is a command, idiom, phrasal verb, or fixed expression, explain the whole phrase instead of translating word-by-word.
+Never return malformed JSON. Every key and string must use double quotes.`;
 
   const model = encodeURIComponent(modelName || GEMINI_DEFAULT_MODEL);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -261,7 +315,7 @@ If the phrase is a command, idiom, phrasal verb, or fixed expression, explain th
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 1200,
+      maxOutputTokens: 700,
       responseMimeType: "application/json",
       responseSchema: geminiDictionarySchema()
     }
@@ -272,49 +326,54 @@ If the phrase is a command, idiom, phrasal verb, or fixed expression, explain th
   const data = await response.json();
   const text = extractGeminiText(data);
   const parsed = parseGeminiDictionaryOutput(text, word);
-  const primary = cleanTranslation(parsed?.primary || parsed?.meaning || "");
-  const meanings = uniqueClean([primary, ...(Array.isArray(parsed?.meanings) ? parsed.meanings : [])]).slice(0, 8);
-  const definitions = sanitizeDefinitions(Array.isArray(parsed?.definitions) ? parsed.definitions : []);
-  const notes = cleanTranslation(parsed?.notes || "");
+
+  const primary = cleanTranslation(parsed?.primary || parsed?.primaryVi || parsed?.meaning || "");
+  const meanings = uniqueClean([
+    primary,
+    ...(Array.isArray(parsed?.meanings) ? parsed.meanings : [])
+  ]).slice(0, 5);
+
+  const definitions = sanitizeDefinitions(
+    Array.isArray(parsed?.definitions) ? parsed.definitions : []
+  );
+
+  const notes = cleanTranslation(parsed?.notes || parsed?.noteVi || "");
   if (notes) {
-    definitions.push({ partOfSpeech: "note", definition: notes, viDefinition: notes, example: "", synonyms: [] });
+    definitions.push({
+      partOfSpeech: "note",
+      definition: "",
+      viDefinition: notes,
+      example: "",
+      exampleVi: "",
+      synonyms: []
+    });
   }
 
   const finalPrimary = meanings[0] || definitions[0]?.viDefinition || word;
+
   return {
     primary: finalPrimary,
     meanings: meanings.length ? meanings : [finalPrimary],
-    definitions: definitions.slice(0, 8),
-    provider: `Gemini (${modelName})${parsed.__loose ? " · loose parse" : ""}`
+    definitions,
+    provider: `Gemini (${modelName})`
   };
 }
 
 
 async function geminiFetchWithRetry(url, apiKey, requestBody) {
-  let lastResponse = null;
-  let lastText = "";
+  const response = await fetchWithTimeout(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey
+    },
+    body: JSON.stringify(requestBody)
+  }, 18000);
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await fetchWithTimeout(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey
-      },
-      body: JSON.stringify(requestBody)
-    }, 18000);
+  if (response.ok) return response;
 
-    if (response.ok) return response;
-
-    lastResponse = response;
-    lastText = await response.text().catch(() => "");
-
-    // 503/429 are usually transient overload/rate-limit. One short retry helps without making the UI feel stuck.
-    if (![429, 500, 502, 503, 504].includes(response.status)) break;
-    await sleep(650 + attempt * 900);
-  }
-
-  throw new Error(`Gemini API failed ${lastResponse?.status || "unknown"}: ${lastText.slice(0, 220)}`);
+  const text = await response.text().catch(() => "");
+  throw new Error(`Gemini API failed ${response.status}: ${text.slice(0, 220)}`);
 }
 
 function sleep(ms) {
@@ -326,7 +385,10 @@ function geminiDictionarySchema() {
     type: "OBJECT",
     properties: {
       primary: { type: "STRING" },
-      meanings: { type: "ARRAY", items: { type: "STRING" } },
+      meanings: {
+        type: "ARRAY",
+        items: { type: "STRING" }
+      },
       definitions: {
         type: "ARRAY",
         items: {
@@ -336,9 +398,18 @@ function geminiDictionarySchema() {
             definition: { type: "STRING" },
             viDefinition: { type: "STRING" },
             example: { type: "STRING" },
-            synonyms: { type: "ARRAY", items: { type: "STRING" } }
+            synonyms: {
+              type: "ARRAY",
+              items: { type: "STRING" }
+            }
           },
-          required: ["partOfSpeech", "definition", "viDefinition", "example", "synonyms"]
+          required: [
+            "partOfSpeech",
+            "definition",
+            "viDefinition",
+            "example",
+            "synonyms"
+          ]
         }
       },
       notes: { type: "STRING" }
@@ -346,7 +417,6 @@ function geminiDictionarySchema() {
     required: ["primary", "meanings", "definitions", "notes"]
   };
 }
-
 function extractGeminiText(data) {
   const parts = data?.candidates?.[0]?.content?.parts || [];
   const text = parts.map((part) => part.text || "").join("\n").trim();
@@ -360,48 +430,49 @@ function parseGeminiDictionaryOutput(text, word) {
   const raw = String(text || "").trim();
   if (!raw) throw new Error("Gemini returned empty text");
 
-  const parsed = tryParseJsonObject(raw);
+  const parsed = tryParseJsonObject(raw) || tryParseJsonObject(repairLooseGeminiJson(raw));
   if (parsed) return parsed;
 
-  // Last-resort: Gemini sometimes ignores JSON despite responseMimeType on older/preview models.
-  // Keep Gemini's answer instead of dropping to weak machine translation.
-  const lines = raw
+  // Do not save a broken pseudo-JSON answer to the deck.
+  // If Gemini ignores structured JSON, let the caller fall back to Dictionary/MyMemory.
+  console.warn("Gemini non-JSON output ignored", raw.slice(0, 500));
+  throw new Error("Gemini did not return valid JSON");
+}
+
+function repairLooseGeminiJson(raw) {
+  let text = String(raw || "")
     .replace(/```(?:json)?/gi, "")
     .replace(/```/g, "")
-    .split(/\n+/)
-    .map((line) => cleanTranslation(line.replace(/^[-*•\d.)\s]+/, "")))
-    .filter(Boolean)
-    .slice(0, 8);
+    .trim();
 
-  if (!lines.length) throw new Error("Gemini did not return valid JSON");
+  // Strip duplicated leading braces caused by truncated/model text.
+  text = text.replace(/^\s*\{\s*\{+/, "{");
 
-  return {
-    __loose: true,
-    primary: lines[0],
-    meanings: uniqueClean(lines).slice(0, 5),
-    definitions: [{
-      partOfSpeech: "note",
-      definition: raw.slice(0, 500),
-      viDefinition: lines.join("; ").slice(0, 500),
-      example: "",
-      synonyms: []
-    }],
-    notes: "Gemini trả về text thường, extension đã tự parse tạm."
-  };
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first >= 0 && last > first) text = text.slice(first, last + 1);
+
+  // Quote common unquoted keys from Gemini-ish pseudo JSON.
+  text = text.replace(/([{,]\s*)(primary|primaryVi|meanings|definitions|notes|noteVi|partOfSpeech|definition|viDefinition|example|exampleVi|synonyms|domain|pos)\s*:/g, '$1"$2":');
+
+  // Remove semicolons that sometimes appear after lines.
+  text = text.replace(/;\s*([}\],])/g, "$1").replace(/;\s*$/g, "");
+
+  return text;
 }
 
 function tryParseJsonObject(raw) {
-  try { return JSON.parse(raw); } catch (_) {}
+  try { return JSON.parse(raw); } catch (_) { }
 
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
   if (fenced) {
-    try { return JSON.parse(fenced.trim()); } catch (_) {}
+    try { return JSON.parse(fenced.trim()); } catch (_) { }
   }
 
   const first = raw.indexOf("{");
   const last = raw.lastIndexOf("}");
   if (first >= 0 && last > first) {
-    try { return JSON.parse(raw.slice(first, last + 1)); } catch (_) {}
+    try { return JSON.parse(raw.slice(first, last + 1)); } catch (_) { }
   }
 
   return null;
@@ -421,8 +492,8 @@ async function translateViaMyMemory(text) {
   const primary = cleanTranslation(data?.responseData?.translatedText || "");
   const fromMatches = Array.isArray(data?.matches)
     ? data.matches
-        .map((item) => cleanTranslation(item?.translation || ""))
-        .filter(Boolean)
+      .map((item) => cleanTranslation(item?.translation || ""))
+      .filter(Boolean)
     : [];
 
   return {
@@ -464,7 +535,7 @@ async function fetchDictionaryDefinitions(word) {
     let viDefinition = "";
     try {
       viDefinition = (await translateViaMyMemory(item.definition)).primary;
-    } catch (_) {}
+    } catch (_) { }
     translated.push({ ...item, viDefinition: viDefinition || item.definition });
   }
   return translated;
@@ -488,13 +559,40 @@ function uniqueClean(items) {
 }
 
 function cleanTranslation(text) {
-  return String(text || "")
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
+  let value = String(text || "");
+
+  // Some translation APIs return HTML/XML-ish fragments like:
+  //   Ch&#7881; m&#7897;t ...
+  //   Sự tò<ex id="_1"/>
+  // Decode numeric entities and remove markup before saving/displaying.
+  value = value
     .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
     .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
+    .replace(/&gt;/g, ">");
+
+  value = value.replace(/&?#(x?[0-9a-fA-F]+);/g, (_, code) => {
+    const base = String(code).toLowerCase().startsWith("x") ? 16 : 10;
+    const raw = String(code).replace(/^x/i, "");
+    const point = parseInt(raw, base);
+    if (!Number.isFinite(point)) return "";
+    try {
+      return String.fromCodePoint(point);
+    } catch (_) {
+      return "";
+    }
+  });
+
+  value = value
+    .replace(/<\/?(?:ex|mrk|ph|bpt|ept|it|x)[^>]*>/gi, "")
+    .replace(/<[^>]{1,80}>/g, "")
+    .replace(/[{}[\]]/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
+
+  return value;
 }
 
 function sanitizeMeanings(meanings, translation = "") {
@@ -504,12 +602,13 @@ function sanitizeMeanings(meanings, translation = "") {
 function sanitizeDefinitions(definitions) {
   if (!Array.isArray(definitions)) return [];
   return definitions.slice(0, 6).map((item) => ({
-    partOfSpeech: String(item?.partOfSpeech || "").slice(0, 30),
-    definition: String(item?.definition || "").slice(0, 400),
-    viDefinition: String(item?.viDefinition || "").slice(0, 500),
-    example: String(item?.example || "").slice(0, 300),
-    synonyms: Array.isArray(item?.synonyms) ? item.synonyms.map(String).slice(0, 5) : []
-  })).filter((item) => item.definition || item.viDefinition);
+    partOfSpeech: cleanTranslation(item?.partOfSpeech || item?.pos || "").slice(0, 30),
+    definition: cleanTranslation(item?.definition || item?.enDefinition || "").slice(0, 400),
+    viDefinition: cleanTranslation(item?.viDefinition || item?.viExplanation || item?.noteVi || "").slice(0, 500),
+    example: cleanTranslation(item?.example || item?.exampleEn || "").slice(0, 300),
+    exampleVi: cleanTranslation(item?.exampleVi || "").slice(0, 300),
+    synonyms: Array.isArray(item?.synonyms) ? item.synonyms.map(cleanTranslation).filter(Boolean).slice(0, 5) : []
+  })).filter((item) => item.definition || item.viDefinition || item.example || item.exampleVi);
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 9000) {
@@ -524,7 +623,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 9000) {
 
 async function saveWord(payload, tab) {
   const word = normalizeWord(payload.word);
-  const translation = String(payload.translation || "").trim();
+  const translation = cleanTranslation(payload.translation || "");
   if (!word) throw new Error("Missing word");
   if (!translation) throw new Error("Missing translation");
 
@@ -541,7 +640,7 @@ async function saveWord(payload, tab) {
     meanings: sanitizeMeanings(payload.meanings, translation),
     definitions: sanitizeDefinitions(payload.definitions),
     provider: String(payload.provider || "").slice(0, 80),
-    context: String(payload.context || "").slice(0, 500),
+    context: cleanTranslation(payload.context || "").slice(0, 500),
     sourceUrl: String(payload.sourceUrl || tab?.url || ""),
     sourceTitle: String(payload.sourceTitle || tab?.title || ""),
     createdAt: existingIndex >= 0 ? deck[existingIndex].createdAt : now,
@@ -558,18 +657,16 @@ async function saveWord(payload, tab) {
 
 function normalizeImportedTranslation(value) {
   if (Array.isArray(value)) {
-    return value
-      .map((item) => String(item || "").trim())
-      .filter(Boolean)
+    return uniqueClean(value)
       .slice(0, 5)
       .join("; ");
   }
   if (value && typeof value === "object") {
     if (Array.isArray(value.t)) return normalizeImportedTranslation(value.t);
     if (Array.isArray(value.translations)) return normalizeImportedTranslation(value.translations);
-    if (value.text) return String(value.text).trim();
+    if (value.text) return cleanTranslation(value.text);
   }
-  return String(value || "").trim();
+  return cleanTranslation(value);
 }
 
 function sanitizeDeck(deck) {
@@ -588,10 +685,10 @@ function sanitizeDeck(deck) {
       translation,
       meanings: sanitizeMeanings(raw.meanings, translation),
       definitions: sanitizeDefinitions(raw.definitions),
-      provider: String(raw.provider || raw.source || (raw.sl || raw.tl ? `${raw.sl || "?"}->${raw.tl || "?"}` : "import")).slice(0, 80),
-      context: String(raw.context || "").slice(0, 500),
+      provider: cleanTranslation(raw.provider || raw.source || (raw.sl || raw.tl ? `${raw.sl || "?"}->${raw.tl || "?"}` : "import")).slice(0, 80),
+      context: cleanTranslation(raw.context || "").slice(0, 500),
       sourceUrl: String(raw.sourceUrl || ""),
-      sourceTitle: String(raw.sourceTitle || ""),
+      sourceTitle: cleanTranslation(raw.sourceTitle || ""),
       createdAt: raw.createdAt || new Date().toISOString(),
       updatedAt: raw.updatedAt || raw.createdAt || new Date().toISOString(),
       timesSeen: Number.isFinite(Number(raw.timesSeen)) ? Number(raw.timesSeen) : 1
@@ -615,22 +712,36 @@ function normalizeIconLabel(input) {
 }
 
 function normalizeWord(input) {
-  const text = String(input || "")
+  let text = String(input || "")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .replace(/[^A-Za-z0-9_'’.\-/\s]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
-  const match = text.match(/[A-Za-z][A-Za-z'’-]{0,48}/);
-  if (!match) return "";
-  return match[0].replace(/[’]/g, "'");
+
+  text = text.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");
+  if (!/[A-Za-z]/.test(text)) return "";
+
+  // Support short phrases like "OpenID Connect", "claims and scopes",
+  // "authorization code flow". Cap long selections to avoid saving whole paragraphs.
+  const words = text.split(/\s+/).filter(Boolean).slice(0, 12);
+  let phrase = words.join(" ");
+
+  if (phrase.length > 120) {
+    phrase = phrase.slice(0, 120).replace(/\s+\S*$/, "").trim() || phrase.slice(0, 120).trim();
+  }
+
+  return phrase.replace(/[’]/g, "'");
 }
 
 async function broadcastDeckChanged() {
   const deck = await getDeck();
-  chrome.runtime.sendMessage({ type: "DECK_CHANGED", deck }).catch(() => {});
+  chrome.runtime.sendMessage({ type: "DECK_CHANGED", deck }).catch(() => { });
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
     if (!tab.id || !isInjectableUrl(tab.url)) continue;
-    chrome.tabs.sendMessage(tab.id, { type: "DECK_CHANGED", deck }).catch(() => {});
+    chrome.tabs.sendMessage(tab.id, { type: "DECK_CHANGED", deck }).catch(() => { });
   }
 }
 
@@ -639,7 +750,7 @@ async function broadcastSettingsChanged() {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
     if (!tab.id || !isInjectableUrl(tab.url)) continue;
-    chrome.tabs.sendMessage(tab.id, { type: "SETTINGS_CHANGED", settings }).catch(() => {});
+    chrome.tabs.sendMessage(tab.id, { type: "SETTINGS_CHANGED", settings }).catch(() => { });
   }
 }
 
@@ -704,7 +815,7 @@ async function clearGoogleToken() {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" }
       });
-    } catch (_) {}
+    } catch (_) { }
   }
   await chrome.storage.local.remove([
     STORAGE_KEYS.GOOGLE_TOKEN,

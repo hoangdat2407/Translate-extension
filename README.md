@@ -2,7 +2,7 @@
 
 A personal Chrome/Edge extension for learning English while reading on the web.
 
-Select an English word or phrase, click the floating translate button, and WordDeck will translate it to Vietnamese, save it to your deck, highlight it when it appears again, and let you review it as flashcards.
+Select an English word or phrase, click the floating translate button, and WordDeck will translate it to Vietnamese, save it to your deck, highlight it when it appears again, and let you review it as flashcards. The UI is intentionally plain, teal, and distraction-free.
 
 ## Features
 
