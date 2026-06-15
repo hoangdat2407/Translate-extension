@@ -81,6 +81,7 @@ async function handleMessage(message, sender) {
     case "SAVE_WORD": {
       const entry = await saveWord(message.payload || {}, sender?.tab || null);
       await broadcastDeckChanged();
+      tryAutoSync();
       return { ok: true, entry, deck: await getDeck() };
     }
     case "DELETE_WORD": {
@@ -91,6 +92,7 @@ async function handleMessage(message, sender) {
       const nextDeck = deck.filter((item) => !matchesDeleteTarget(item, targets));
       await setDeck(nextDeck);
       await broadcastDeckChanged();
+      tryAutoSync();
 
       return {
         ok: true,
@@ -101,6 +103,7 @@ async function handleMessage(message, sender) {
     case "CLEAR_DECK": {
       await setDeck([]);
       await broadcastDeckChanged();
+      tryAutoSync();
       return { ok: true, deck: [] };
     }
     case "IMPORT_DECK": {
@@ -108,6 +111,7 @@ async function handleMessage(message, sender) {
       const merged = mergeDecks(await getDeck(), sanitizeDeck(incoming));
       await setDeck(merged);
       await broadcastDeckChanged();
+      tryAutoSync();
       return { ok: true, deck: merged };
     }
     case "UPDATE_SETTINGS": {
@@ -904,4 +908,26 @@ async function syncDeckWithGoogleDrive() {
     mergedCount: mergedDeck.length,
     driveFileId: uploaded?.id || remoteFile?.id || null
   };
+}
+
+async function hasValidGoogleToken() {
+  const stored = await chrome.storage.local.get([
+    STORAGE_KEYS.GOOGLE_TOKEN,
+    STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT
+  ]);
+  const token = stored[STORAGE_KEYS.GOOGLE_TOKEN];
+  const expiresAt = Number(stored[STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT] || 0);
+  return !!token && Date.now() < expiresAt - 60_000;
+}
+
+async function tryAutoSync() {
+  try {
+    const hasToken = await hasValidGoogleToken();
+    if (hasToken) {
+      await syncDeckWithGoogleDrive();
+      await broadcastDeckChanged();
+    }
+  } catch (error) {
+    console.warn("Auto sync failed:", error);
+  }
 }
