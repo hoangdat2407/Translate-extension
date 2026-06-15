@@ -85,34 +85,53 @@ async function handleMessage(message, sender) {
       return { ok: true, entry, deck: await getDeck() };
     }
     case "DELETE_WORD": {
-      const deck = await getDeck();
+      const rawDeck = await getRawDeck();
       const targets = buildDeleteTargets(message);
       if (!targets.size) throw new Error("Missing word to delete");
 
-      const nextDeck = deck.filter((item) => !matchesDeleteTarget(item, targets));
-      await setDeck(nextDeck);
+      let removedCount = 0;
+      const now = new Date().toISOString();
+      const nextRawDeck = rawDeck.map((item) => {
+        if (matchesDeleteTarget(item, targets)) {
+          if (!item.deleted) {
+            removedCount++;
+            return { ...item, deleted: true, updatedAt: now };
+          }
+        }
+        return item;
+      });
+
+      await setRawDeck(nextRawDeck);
       await broadcastDeckChanged();
       tryAutoSync();
 
+      const activeDeck = nextRawDeck.filter((item) => !item.deleted);
       return {
         ok: true,
-        deck: nextDeck,
-        removedCount: deck.length - nextDeck.length
+        deck: activeDeck,
+        removedCount
       };
     }
     case "CLEAR_DECK": {
-      await setDeck([]);
+      const rawDeck = await getRawDeck();
+      const now = new Date().toISOString();
+      const nextRawDeck = rawDeck.map((item) => ({
+        ...item,
+        deleted: true,
+        updatedAt: now
+      }));
+      await setRawDeck(nextRawDeck);
       await broadcastDeckChanged();
       tryAutoSync();
       return { ok: true, deck: [] };
     }
     case "IMPORT_DECK": {
       const incoming = Array.isArray(message.deck) ? message.deck : [];
-      const merged = mergeDecks(await getDeck(), sanitizeDeck(incoming));
-      await setDeck(merged);
+      const merged = mergeDecks(await getRawDeck(), sanitizeDeck(incoming));
+      await setRawDeck(merged);
       await broadcastDeckChanged();
       tryAutoSync();
-      return { ok: true, deck: merged };
+      return { ok: true, deck: merged.filter((item) => !item.deleted) };
     }
     case "UPDATE_SETTINGS": {
       const settings = await updateSettings(message.patch || {});
@@ -199,13 +218,22 @@ function matchesDeleteTarget(item, targets) {
 }
 
 
-async function getDeck() {
+async function getRawDeck() {
   const data = await chrome.storage.local.get(STORAGE_KEYS.DECK);
   return Array.isArray(data[STORAGE_KEYS.DECK]) ? sanitizeDeck(data[STORAGE_KEYS.DECK]) : [];
 }
 
-async function setDeck(deck) {
+async function setRawDeck(deck) {
   await chrome.storage.local.set({ [STORAGE_KEYS.DECK]: sanitizeDeck(deck) });
+}
+
+async function getDeck() {
+  const rawDeck = await getRawDeck();
+  return rawDeck.filter((item) => !item.deleted);
+}
+
+async function setDeck(deck) {
+  await setRawDeck(deck);
 }
 
 async function getSettings() {
@@ -633,11 +661,11 @@ async function saveWord(payload, tab) {
 
   const now = new Date().toISOString();
   const normalized = word.toLowerCase();
-  const deck = await getDeck();
-  const existingIndex = deck.findIndex((item) => item.normalized === normalized);
+  const rawDeck = await getRawDeck();
+  const existingIndex = rawDeck.findIndex((item) => item.normalized === normalized);
 
   const entry = {
-    id: existingIndex >= 0 ? deck[existingIndex].id : crypto.randomUUID(),
+    id: existingIndex >= 0 ? rawDeck[existingIndex].id : crypto.randomUUID(),
     word,
     normalized,
     translation,
@@ -647,15 +675,16 @@ async function saveWord(payload, tab) {
     context: cleanTranslation(payload.context || "").slice(0, 500),
     sourceUrl: String(payload.sourceUrl || tab?.url || ""),
     sourceTitle: String(payload.sourceTitle || tab?.title || ""),
-    createdAt: existingIndex >= 0 ? deck[existingIndex].createdAt : now,
+    createdAt: existingIndex >= 0 ? rawDeck[existingIndex].createdAt : now,
     updatedAt: now,
-    timesSeen: existingIndex >= 0 ? (deck[existingIndex].timesSeen || 0) + 1 : 1
+    timesSeen: existingIndex >= 0 ? (rawDeck[existingIndex].timesSeen || 0) + 1 : 1,
+    deleted: false
   };
 
-  if (existingIndex >= 0) deck[existingIndex] = { ...deck[existingIndex], ...entry };
-  else deck.unshift(entry);
+  if (existingIndex >= 0) rawDeck[existingIndex] = { ...rawDeck[existingIndex], ...entry };
+  else rawDeck.unshift(entry);
 
-  await setDeck(deck);
+  await setRawDeck(rawDeck);
   return entry;
 }
 
@@ -695,7 +724,8 @@ function sanitizeDeck(deck) {
       sourceTitle: cleanTranslation(raw.sourceTitle || ""),
       createdAt: raw.createdAt || new Date().toISOString(),
       updatedAt: raw.updatedAt || raw.createdAt || new Date().toISOString(),
-      timesSeen: Number.isFinite(Number(raw.timesSeen)) ? Number(raw.timesSeen) : 1
+      timesSeen: Number.isFinite(Number(raw.timesSeen)) ? Number(raw.timesSeen) : 1,
+      deleted: Boolean(raw.deleted)
     };
     const old = seen.get(normalized);
     if (!old || new Date(item.updatedAt) > new Date(old.updatedAt)) {
@@ -895,17 +925,17 @@ async function uploadDriveDeck(deck, existingFileId = null) {
 }
 
 async function syncDeckWithGoogleDrive() {
-  const localDeck = await getDeck();
+  const localDeck = await getRawDeck();
   const remoteFile = await findDriveDeckFile();
   const remoteDeck = remoteFile ? await downloadDriveDeck(remoteFile.id) : [];
   const mergedDeck = mergeDecks(localDeck, remoteDeck);
   const uploaded = await uploadDriveDeck(mergedDeck, remoteFile?.id || null);
-  await setDeck(mergedDeck);
+  await setRawDeck(mergedDeck);
   return {
-    deck: mergedDeck,
-    localCountBefore: localDeck.length,
-    remoteCountBefore: remoteDeck.length,
-    mergedCount: mergedDeck.length,
+    deck: mergedDeck.filter((item) => !item.deleted),
+    localCountBefore: localDeck.filter((item) => !item.deleted).length,
+    remoteCountBefore: remoteDeck.filter((item) => !item.deleted).length,
+    mergedCount: mergedDeck.filter((item) => !item.deleted).length,
     driveFileId: uploaded?.id || remoteFile?.id || null
   };
 }
