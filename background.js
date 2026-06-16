@@ -53,9 +53,20 @@ async function handleMessage(message, sender) {
     case "TRANSLATE_WORD": {
       const word = normalizeWord(message.word);
       if (!word) throw new Error("No word to translate");
-      const deck = await getDeck();
-      const existing = deck.find((item) => item.normalized === word.toLowerCase());
-      if (existing?.translation) {
+      const rawDeck = await getRawDeck();
+      const existingIndex = rawDeck.findIndex((item) => item.normalized === word.toLowerCase());
+      const existing = existingIndex >= 0 ? rawDeck[existingIndex] : null;
+      if (existing?.translation && !existing.deleted) {
+        // Cập nhật timesSeen và updatedAt mỗi khi xem lại từ đã lưu
+        const now = new Date().toISOString();
+        rawDeck[existingIndex] = {
+          ...existing,
+          timesSeen: (existing.timesSeen || 0) + 1,
+          updatedAt: now
+        };
+        await setRawDeck(rawDeck);
+        await broadcastDeckChanged();
+        tryAutoSync();
         return {
           ok: true,
           word,
@@ -64,7 +75,7 @@ async function handleMessage(message, sender) {
           definitions: existing.definitions || [],
           provider: existing.provider || "deck",
           fromDeck: true,
-          entry: existing
+          entry: rawDeck[existingIndex]
         };
       }
       const translated = await translateWordToVietnamese(word);
@@ -953,11 +964,16 @@ async function hasValidGoogleToken() {
 async function tryAutoSync() {
   try {
     const hasToken = await hasValidGoogleToken();
-    if (hasToken) {
-      await syncDeckWithGoogleDrive();
-      await broadcastDeckChanged();
-    }
+    if (!hasToken) return;
+    const result = await syncDeckWithGoogleDrive();
+    await broadcastDeckChanged();
+    broadcastAutoSyncStatus({ ok: true, mergedCount: result.mergedCount });
   } catch (error) {
     console.warn("Auto sync failed:", error);
+    broadcastAutoSyncStatus({ ok: false, error: error?.message || String(error) });
   }
+}
+
+function broadcastAutoSyncStatus(status) {
+  chrome.runtime.sendMessage({ type: "AUTO_SYNC_STATUS", ...status }).catch(() => {});
 }

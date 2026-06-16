@@ -104,6 +104,13 @@ function bindEvents() {
       deck = message.deck || [];
       render();
     }
+    if (message?.type === "AUTO_SYNC_STATUS") {
+      if (message.ok) {
+        els.syncStatus.textContent = `✓ Tự đồng bộ xong (${message.mergedCount} từ) — ${new Date().toLocaleTimeString("vi-VN")}`;
+      } else {
+        els.syncStatus.textContent = `⚠ Tự đồng bộ lỗi: ${message.error || "Không xác định"}`;
+      }
+    }
   });
 }
 

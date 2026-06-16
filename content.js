@@ -457,35 +457,52 @@ async function translateAndAutoSaveSelection(selectionInfo) {
     const result = await sendMessage({ type: "TRANSLATE_WORD", word });
     if (!result.ok) throw new Error(result.error || "Translate failed");
 
-    const saveResult = await sendMessage({
-      type: "SAVE_WORD",
-      payload: {
+    if (result.fromDeck) {
+      // Background đã tự cập nhật timesSeen và trigger sync khi TRANSLATE_WORD
+      deck = await sendMessage({ type: "GET_DECK" }).then((r) => r.deck || deck).catch(() => deck);
+      scheduleHighlight(true);
+      showPanel({
+        x: point.x,
+        y: point.y,
         word: result.word,
         translation: result.translation,
         meanings: result.meanings || [],
         definitions: result.definitions || [],
         provider: result.provider || "",
-        context,
-        sourceUrl: location.href,
-        sourceTitle: document.title
-      }
-    });
-    if (!saveResult.ok) throw new Error(saveResult.error || "Save failed");
+        status: "Từ này đã có trong deck, vừa cập nhật số lần gặp và tự đồng bộ.",
+        saved: true
+      });
+    } else {
+      const saveResult = await sendMessage({
+        type: "SAVE_WORD",
+        payload: {
+          word: result.word,
+          translation: result.translation,
+          meanings: result.meanings || [],
+          definitions: result.definitions || [],
+          provider: result.provider || "",
+          context,
+          sourceUrl: location.href,
+          sourceTitle: document.title
+        }
+      });
+      if (!saveResult.ok) throw new Error(saveResult.error || "Save failed");
 
-    deck = saveResult.deck || deck;
-    scheduleHighlight(true);
+      deck = saveResult.deck || deck;
+      scheduleHighlight(true);
 
-    showPanel({
-      x: point.x,
-      y: point.y,
-      word: result.word,
-      translation: result.translation,
-      meanings: result.meanings || [],
-      definitions: result.definitions || [],
-      provider: result.provider || "",
-      status: result.fromDeck ? "Từ này đã có trong deck, vừa cập nhật số lần gặp." : "Đã tự lưu vào deck. Mở popup extension để xem list/ôn tập.",
-      saved: true
-    });
+      showPanel({
+        x: point.x,
+        y: point.y,
+        word: result.word,
+        translation: result.translation,
+        meanings: result.meanings || [],
+        definitions: result.definitions || [],
+        provider: result.provider || "",
+        status: "Đã tự lưu vào deck. Mở popup extension để xem list/ôn tập.",
+        saved: true
+      });
+    }
   } catch (error) {
     showPanel({
       x: point.x,
