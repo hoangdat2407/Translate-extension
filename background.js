@@ -41,10 +41,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+// Use alarms to run sync reliably — MV3 service workers can be suspended
+// before a fire-and-forget promise completes. Alarms wake the SW up.
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "pendingSync") {
+    tryAutoSync();
+  }
+});
+
+function scheduleSyncAlarm() {
+  // delayInMinutes must be >= 1/60 (about 1 second) per Chrome spec
+  chrome.alarms.create("pendingSync", { delayInMinutes: 1 / 60 });
+}
+
 async function handleMessage(message, sender) {
   switch (message?.type) {
     case "GET_STATE": {
       const [deck, settings] = await Promise.all([getDeck(), getSettings()]);
+      const isExtensionPage = !sender?.tab || (sender?.tab?.url && sender.tab.url.startsWith("chrome-extension://"));
+      if (isExtensionPage) {
+        tryAutoSync(15000); // 15s cooldown
+      }
       return { ok: true, deck, settings, redirectUri: chrome.identity.getRedirectURL("oauth2") };
     }
     case "GET_DECK": {
@@ -81,7 +98,7 @@ async function handleMessage(message, sender) {
     case "SAVE_WORD": {
       const entry = await saveWord(message.payload || {}, sender?.tab || null);
       await broadcastDeckChanged();
-      tryAutoSync();
+      scheduleSyncAlarm();
       return { ok: true, entry, deck: await getDeck() };
     }
     case "DELETE_WORD": {
@@ -103,7 +120,7 @@ async function handleMessage(message, sender) {
 
       await setRawDeck(nextRawDeck);
       await broadcastDeckChanged();
-      tryAutoSync();
+      scheduleSyncAlarm();
 
       const activeDeck = nextRawDeck.filter((item) => !item.deleted);
       return {
@@ -122,7 +139,7 @@ async function handleMessage(message, sender) {
       }));
       await setRawDeck(nextRawDeck);
       await broadcastDeckChanged();
-      tryAutoSync();
+      scheduleSyncAlarm();
       return { ok: true, deck: [] };
     }
     case "IMPORT_DECK": {
@@ -130,7 +147,7 @@ async function handleMessage(message, sender) {
       const merged = mergeDecks(await getRawDeck(), sanitizeDeck(incoming));
       await setRawDeck(merged);
       await broadcastDeckChanged();
-      tryAutoSync();
+      scheduleSyncAlarm();
       return { ok: true, deck: merged.filter((item) => !item.deleted) };
     }
     case "UPDATE_SETTINGS": {
@@ -147,8 +164,9 @@ async function handleMessage(message, sender) {
       return { ok: true };
     }
     case "GOOGLE_SYNC": {
-      const result = await syncDeckWithGoogleDrive();
+      const result = await syncDeckWithGoogleDrive(true);
       await broadcastDeckChanged();
+      await chrome.storage.local.set({ lastSyncTime: Date.now() });
       return { ok: true, ...result };
     }
     case "WORDDECK_OPEN_OPTIONS": {
@@ -792,6 +810,23 @@ function isInjectableUrl(url = "") {
   return /^https?:\/\//i.test(url);
 }
 
+function decksAreIdentical(deckA, deckB) {
+  if (deckA.length !== deckB.length) return false;
+  for (let i = 0; i < deckA.length; i++) {
+    const a = deckA[i];
+    const b = deckB[i];
+    if (
+      a.id !== b.id ||
+      a.updatedAt !== b.updatedAt ||
+      a.deleted !== b.deleted ||
+      a.translation !== b.translation
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function getGoogleAccessToken(interactive = true) {
   const stored = await chrome.storage.local.get([
     STORAGE_KEYS.GOOGLE_TOKEN,
@@ -800,8 +835,6 @@ async function getGoogleAccessToken(interactive = true) {
   const token = stored[STORAGE_KEYS.GOOGLE_TOKEN];
   const expiresAt = Number(stored[STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT] || 0);
   if (token && Date.now() < expiresAt - 60_000) return token;
-
-  if (!interactive) throw new Error("Google login required");
 
   const settings = await getSettings();
   const clientId = String(settings.googleClientId || "").trim();
@@ -816,28 +849,40 @@ async function getGoogleAccessToken(interactive = true) {
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("scope", DRIVE_SCOPE);
   authUrl.searchParams.set("include_granted_scopes", "true");
-  authUrl.searchParams.set("prompt", "consent");
+  // silent: prompt=none so Google returns token if session exists, no popup
+  // interactive: no extra prompt param — Google shows account picker only if needed
+  if (!interactive) {
+    authUrl.searchParams.set("prompt", "none");
+  }
 
-  const responseUrl = await chrome.identity.launchWebAuthFlow({
-    url: authUrl.toString(),
-    interactive: true
-  });
+  try {
+    const responseUrl = await chrome.identity.launchWebAuthFlow({
+      url: authUrl.toString(),
+      interactive: interactive
+    });
 
-  if (!responseUrl) throw new Error("OAuth flow did not return a URL");
-  const parsed = new URL(responseUrl);
-  const hash = new URLSearchParams(parsed.hash.replace(/^#/, ""));
-  const error = hash.get("error");
-  if (error) throw new Error(`Google OAuth error: ${error}`);
+    if (!responseUrl) throw new Error("OAuth flow did not return a URL");
+    const parsed = new URL(responseUrl);
+    const hash = new URLSearchParams(parsed.hash.replace(/^#/, ""));
+    const error = hash.get("error");
+    if (error) throw new Error(`Google OAuth error: ${error}`);
 
-  const accessToken = hash.get("access_token");
-  const expiresIn = Number(hash.get("expires_in") || 3600);
-  if (!accessToken) throw new Error("No Google access token returned");
+    const accessToken = hash.get("access_token");
+    const expiresIn = Number(hash.get("expires_in") || 3600);
+    if (!accessToken) throw new Error("No Google access token returned");
 
-  await chrome.storage.local.set({
-    [STORAGE_KEYS.GOOGLE_TOKEN]: accessToken,
-    [STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT]: Date.now() + expiresIn * 1000
-  });
-  return accessToken;
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.GOOGLE_TOKEN]: accessToken,
+      [STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT]: Date.now() + expiresIn * 1000
+    });
+    return accessToken;
+  } catch (err) {
+    if (!interactive) {
+      console.warn("Silent OAuth flow failed:", err?.message || err);
+      return null;
+    }
+    throw err;
+  }
 }
 
 async function clearGoogleToken() {
@@ -857,8 +902,9 @@ async function clearGoogleToken() {
   ]);
 }
 
-async function driveFetch(path, options = {}) {
-  const token = await getGoogleAccessToken(true);
+async function driveFetch(path, options = {}, interactive = true) {
+  const token = await getGoogleAccessToken(interactive);
+  if (!token) throw new Error("No Google access token available");
   const headers = new Headers(options.headers || {});
   headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(path, { ...options, headers });
@@ -873,19 +919,19 @@ async function driveFetch(path, options = {}) {
   return response;
 }
 
-async function findDriveDeckFile() {
+async function findDriveDeckFile(interactive = true) {
   const q = encodeURIComponent(`name='${DRIVE_DECK_FILE_NAME}'`);
   const fields = encodeURIComponent("files(id,name,modifiedTime)");
   const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${q}&fields=${fields}&pageSize=1`;
-  const response = await driveFetch(url);
+  const response = await driveFetch(url, {}, interactive);
   const data = await response.json();
   return data?.files?.[0] || null;
 }
 
-async function downloadDriveDeck(fileId) {
+async function downloadDriveDeck(fileId, interactive = true) {
   if (!fileId) return [];
   const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
-  const response = await driveFetch(url);
+  const response = await driveFetch(url, {}, interactive);
   const text = await response.text();
   if (!text.trim()) return [];
   const parsed = JSON.parse(text);
@@ -893,7 +939,7 @@ async function downloadDriveDeck(fileId) {
   return sanitizeDeck(parsed.deck || []);
 }
 
-async function uploadDriveDeck(deck, existingFileId = null) {
+async function uploadDriveDeck(deck, existingFileId = null, interactive = true) {
   const metadata = existingFileId
     ? { name: DRIVE_DECK_FILE_NAME, mimeType: "application/json" }
     : { name: DRIVE_DECK_FILE_NAME, parents: ["appDataFolder"], mimeType: "application/json" };
@@ -920,16 +966,22 @@ async function uploadDriveDeck(deck, existingFileId = null) {
     method: existingFileId ? "PATCH" : "POST",
     headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
     body
-  });
+  }, interactive);
   return response.json();
 }
 
-async function syncDeckWithGoogleDrive() {
+async function syncDeckWithGoogleDrive(interactive = true) {
   const localDeck = await getRawDeck();
-  const remoteFile = await findDriveDeckFile();
-  const remoteDeck = remoteFile ? await downloadDriveDeck(remoteFile.id) : [];
+  const remoteFile = await findDriveDeckFile(interactive);
+  const remoteDeck = remoteFile ? await downloadDriveDeck(remoteFile.id, interactive) : [];
   const mergedDeck = mergeDecks(localDeck, remoteDeck);
-  const uploaded = await uploadDriveDeck(mergedDeck, remoteFile?.id || null);
+
+  let uploaded = null;
+  const remoteChanged = !decksAreIdentical(mergedDeck, remoteDeck);
+  if (remoteChanged || !remoteFile) {
+    uploaded = await uploadDriveDeck(mergedDeck, remoteFile?.id || null, interactive);
+  }
+
   await setRawDeck(mergedDeck);
   return {
     deck: mergedDeck.filter((item) => !item.deleted),
@@ -950,14 +1002,42 @@ async function hasValidGoogleToken() {
   return !!token && Date.now() < expiresAt - 60_000;
 }
 
-async function tryAutoSync() {
+async function hasLoggedInBefore() {
+  const stored = await chrome.storage.local.get(STORAGE_KEYS.GOOGLE_TOKEN);
+  return !!stored[STORAGE_KEYS.GOOGLE_TOKEN];
+}
+
+async function tryAutoSync(cooldownMs = 0) {
   try {
-    const hasToken = await hasValidGoogleToken();
-    if (hasToken) {
-      await syncDeckWithGoogleDrive();
-      await broadcastDeckChanged();
+    const settings = await getSettings();
+    const clientId = String(settings.googleClientId || "").trim();
+    if (!clientId) return;
+
+    const loggedIn = await hasLoggedInBefore();
+    if (!loggedIn) return;
+
+    if (cooldownMs > 0) {
+      const stored = await chrome.storage.local.get("lastSyncTime");
+      const lastSync = Number(stored.lastSyncTime || 0);
+      if (Date.now() - lastSync < cooldownMs) return;
     }
+
+    // If token is still valid, sync straight away.
+    // If expired, attempt a silent OAuth refresh. If that also fails,
+    // skip quietly — the user will need to click "Login & Sync" once.
+    const tokenValid = await hasValidGoogleToken();
+    if (!tokenValid) {
+      const silentToken = await getGoogleAccessToken(false).catch(() => null);
+      if (!silentToken) return; // can't renew silently, skip
+    }
+
+    await syncDeckWithGoogleDrive(false);
+    await broadcastDeckChanged();
+    await chrome.storage.local.set({ lastSyncTime: Date.now() });
   } catch (error) {
     console.warn("Auto sync failed:", error);
   }
 }
+
+// Schedule a sync shortly after service worker boots
+scheduleSyncAlarm();
