@@ -1081,16 +1081,29 @@ function delay(ms) {
 
 function sendMessage(message) {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
+    try {
+      chrome.runtime.sendMessage(message, (response) => {
+        if (chrome.runtime.lastError) {
+          const msg = chrome.runtime.lastError.message || "";
+          if (msg.includes("Extension context invalidated") || msg.includes("context invalidated")) {
+            reject(new Error("Extension đã được reload. Hãy tải lại trang (F5) để tiếp tục dùng."));
+          } else {
+            reject(new Error(msg));
+          }
+          return;
+        }
+        if (response?.ok === false) {
+          reject(new Error(response.error || "Extension error"));
+          return;
+        }
+        resolve(response || { ok: true });
+      });
+    } catch (err) {
+      if (err?.message?.includes("Extension context") || err?.message?.includes("context invalidated")) {
+        reject(new Error("Extension đã được reload. Hãy tải lại trang (F5) để tiếp tục dùng."));
+      } else {
+        reject(err);
       }
-      if (response?.ok === false) {
-        reject(new Error(response.error || "Extension error"));
-        return;
-      }
-      resolve(response || { ok: true });
-    });
+    }
   });
 }
