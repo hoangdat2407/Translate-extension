@@ -51,22 +51,11 @@
 
     <section class="card">
       <h2>Hành vi trên trang</h2>
-      <label class="check"><input id="selectionIconEnabled" type="checkbox" /> Bôi đen hiện icon dịch</label>
+      <label class="check"><input id="selectionIconEnabled" type="checkbox" /> Bôi đen hiện nút dịch</label>
       <label class="field">
-        <span>Chữ/icon nổi khi bôi đen</span>
-        <input id="selectionIconLabel" type="text" maxlength="3" placeholder="VI, 🌐, 📘..." />
+        <span>Nhãn nút nổi khi bôi đen</span>
+        <input id="selectionIconLabel" type="text" maxlength="3" placeholder="VI" />
       </label>
-      <div class="field">
-        <span>Icon nổi khi bôi đen (Tải ảnh lên)</span>
-        <div class="custom-icon-upload-wrapper">
-          <input id="customIconFile" type="file" accept="image/*" style="display: none;" />
-          <button id="uploadIconButton" class="secondary" type="button">Chọn ảnh làm Icon</button>
-          <button id="removeIconButton" class="secondary danger hidden" type="button">Xóa ảnh</button>
-          <div id="customIconPreviewContainer" class="custom-icon-preview-container default-preview">
-            <img id="customIconPreview" src="icon/image.png" alt="Icon Preview" />
-          </div>
-        </div>
-      </div>
       <label class="check"><input id="clickTranslateEnabled" type="checkbox" /> Bật dịch bằng click cũ</label>
       <label class="check"><input id="highlightEnabled" type="checkbox" /> Highlight từ đã lưu</label>
       <label class="check"><input id="autoSaveOnDoubleClick" type="checkbox" /> Double-click tự dịch và tự lưu khi dùng mode click cũ</label>

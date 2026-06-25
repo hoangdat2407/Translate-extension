@@ -18,6 +18,10 @@ let pendingSelection = null;
 let lastPointer = { x: 16, y: 16 };
 let uiHost = null;
 let uiRoot = null;
+const deckLookupCache = {
+  source: null,
+  byWord: new Map()
+};
 
 const CHATGPT_HOST_RE = /(^|\.)(chatgpt\.com|chat\.openai\.com)$/i;
 const isChatGptPage = CHATGPT_HOST_RE.test(location.hostname);
@@ -118,42 +122,39 @@ function installShadowUi() {
       .hidden { display: none !important; }
       #selectionIcon {
         position: fixed;
-        width: 32px;
-        height: 32px;
-        padding: 0;
-        border: 1px solid #d0e1db;
-        border-radius: 11px;
+        min-width: 36px;
+        height: 30px;
+        padding: 0 9px;
+        border: 1px solid #cfd8d4;
+        border-radius: 6px;
         background: #ffffff;
-        color: #357a69;
-        box-shadow: 0 2px 8px rgba(34, 50, 44, 0.08);
+        color: #23584e;
+        box-shadow: 0 2px 6px rgba(20, 30, 27, 0.10);
         display: inline-flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
         user-select: none;
         pointer-events: auto;
-        transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+        transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease, background .12s ease;
         font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         font-size: 11px;
         font-weight: 650;
         letter-spacing: .02em;
         z-index: 999;
       }
-      #selectionIcon:hover { transform: translateY(-1px); border-color: #bcd3cb; box-shadow: 0 4px 12px rgba(34, 50, 44, 0.10); }
-      #selectionIcon img { width: 22px; height: 22px; object-fit: cover; border-radius: 9px; filter: none; }
-      #selectionIcon.has-custom-icon { background: #ffffff; border-color: #d0e1db; }
-      #selectionIcon.has-custom-icon img { width: 100%; height: 100%; border-radius: 10px; object-fit: cover; }
+      #selectionIcon:hover { transform: translateY(-1px); background: #f6f8f7; border-color: #aebfba; box-shadow: 0 4px 10px rgba(20, 30, 27, 0.12); }
 
       #panel {
         position: fixed;
         width: 420px;
         max-width: calc(100vw - 18px);
-        border: 1px solid #d7e4de;
-        border-radius: 14px;
+        border: 1px solid #d8dfdc;
+        border-radius: 8px;
         overflow: hidden;
         background: #ffffff;
         color: #1f2c28;
-        box-shadow: 0 8px 20px rgba(27, 42, 37, 0.08);
+        box-shadow: 0 10px 24px rgba(20, 30, 27, 0.12);
         pointer-events: auto;
         font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         z-index: 999;
@@ -162,22 +163,22 @@ function installShadowUi() {
       }
       .bar {
         min-height: 36px;
-        background: #f7fbf9;
-        border-bottom: 1px solid #d9e8e3;
+        background: #f7f8f7;
+        border-bottom: 1px solid #e2e7e4;
         color: #31423d;
         display: flex;
         align-items: center;
         gap: 8px;
         padding: 6px 10px;
       }
-      .icon-btn, .close {
-        padding: 2px 7px;
+      .text-btn, .close {
+        padding: 2px 8px;
         min-width: 24px;
         height: 24px;
         border: 1px solid transparent;
-        border-radius: 8px;
+        border-radius: 5px;
         background: transparent;
-        color: #357a69;
+        color: #38504a;
         cursor: pointer;
         font-weight: 550;
         display: inline-flex;
@@ -186,13 +187,13 @@ function installShadowUi() {
         font-size: 12px;
         transition: background .12s ease, border-color .12s ease;
       }
-      .icon-btn:hover, .close:hover { background: #eef6f2; border-color: #d0e1db; }
+      .text-btn:hover, .close:hover { background: #eef2f0; border-color: #d4ddda; }
       .close { margin-left: auto; font-size: 15px; }
       .lang-pill {
         height: 22px;
         min-width: 38px;
-        border-radius: 8px;
-        border: 1px solid #d0e1db;
+        border-radius: 5px;
+        border: 1px solid #d4ddda;
         background: #ffffff;
         color: #357a69;
         font-size: 11px;
@@ -206,13 +207,13 @@ function installShadowUi() {
       .body { padding: 14px 16px; background: #ffffff; overflow-y: auto; }
       .brand { display: flex; align-items: center; gap: 8px; color: #31423d; font-size: 12px; font-weight: 650; margin-bottom: 10px; }
       .review-btn {
-        width: 24px;
+        width: auto;
         height: 24px;
-        padding: 0;
-        border: 1px solid #d0e1db;
-        background: #eef6f2;
-        color: #357a69;
-        border-radius: 8px;
+        padding: 0 8px;
+        border: 1px solid #d4ddda;
+        background: #f7f8f7;
+        color: #38504a;
+        border-radius: 5px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -220,27 +221,27 @@ function installShadowUi() {
         cursor: pointer;
         transition: background .12s ease, border-color .12s ease;
       }
-      .review-btn:hover { background: #e7f2ed; border-color: #c7ddd5; }
+      .review-btn:hover { background: #eef2f0; border-color: #c4d0cc; }
       .divider { border-top: 1px solid #edf3f0; margin: 0 -16px 12px; }
-      .result { display: grid; grid-template-columns: 1fr 34px; gap: 12px; align-items: start; min-height: 52px; background: #edf3ef; border: 1px solid #cddbd5; border-radius: 12px; padding: 12px; }
+      .result { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; min-height: 52px; background: #f5f7f6; border: 1px solid #d8dfdc; border-radius: 7px; padding: 12px; }
       .word-row { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
       .bullet { color: #72877f; font-weight: 600; }
       #panelWord { font-size: 15px; font-weight: 700; color: #1f2c28; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
       #panelTranslation { margin: 5px 0 0 0; color: #2f6f61; font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
       #panelMeanings { margin: 10px 0 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
-      .meaning-chip { max-width: 100%; border-radius: 999px; background: #dde9e4; border: 1px solid #cbdad4; color: #304640; padding: 3px 8px; font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
+      .meaning-chip { max-width: 100%; border-radius: 5px; background: #eef2f0; border: 1px solid #d5dfdb; color: #304640; padding: 3px 7px; font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
       #panelDefinitions { margin: 10px 0 0 0; color: #30403b; font-size: 12px; line-height: 1.48; display: grid; gap: 8px; }
-      .definition-line { margin-top: 0; padding: 8px 9px; background: #e3ece7; border: 1px solid #cfded7; border-radius: 10px; }
+      .definition-line { margin-top: 0; padding: 8px 9px; background: #f4f6f5; border: 1px solid #d9e0dd; border-radius: 6px; }
       .example-line { margin-top: 5px; color: #5f6f69; font-size: 11px; line-height: 1.45; }
       .pos { color: #2f6f61; font-weight: 700; font-family: ui-monospace, monospace; font-size: 11px; text-transform: lowercase; }
-      .check { width: 34px; height: 34px; border: 1px solid #cbdad4; border-radius: 10px; background: #dde9e4; color: #2f6f61; font-size: 15px; font-weight: 650; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background .12s ease, border-color .12s ease; }
-      .check:hover { background: #d2e3dc; border-color: #bfd2ca; }
+      .check { min-width: 42px; height: 30px; border: 1px solid #cbdad4; border-radius: 6px; background: #eef2f0; color: #2f6f61; font-size: 11px; font-weight: 650; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background .12s ease, border-color .12s ease; }
+      .check:hover { background: #e3ebe7; border-color: #bfd2ca; }
       .auto { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; color: #357a69; font-size: 11px; font-weight: 550; }
-      .auto-dot { width: 15px; height: 15px; border-radius: 6px; background: #3f8f7b; color: #ffffff; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; }
+      .auto-dot { display: none; }
       .panel-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
       .delete-deck-btn {
         border: 1px solid #edd5db;
-        border-radius: 9px;
+        border-radius: 6px;
         background: #fff7f8;
         color: #9f4057;
         padding: 6px 9px;
@@ -254,17 +255,17 @@ function installShadowUi() {
       .error .check { background: #fff1f2; border-color: #fecdd3; color: #be123c; }
       .error #panelTranslation { color: #be123c; }
     </style>
-    <button id="selectionIcon" class="hidden" type="button" title="Dịch và tự lưu vào WordDeck"><img class="spark-img" src="${chrome.runtime.getURL('icon/image.png')}" alt="Logo" /></button>
+    <button id="selectionIcon" class="hidden" type="button" title="Dịch và tự lưu vào WordDeck">VI</button>
     <section id="panel" class="hidden" role="dialog" aria-label="WordDeck translation">
       <div class="bar">
-        <button id="settingsBtn" class="icon-btn" title="Mở cài đặt WordDeck">⚙</button>
+        <button id="settingsBtn" class="text-btn" title="Mở cài đặt WordDeck">Cài đặt</button>
         <span class="lang-pill" title="Ngôn ngữ nguồn">en</span>
         <span class="arrow">»</span>
         <span class="lang-pill" title="Ngôn ngữ đích">vi</span>
         <button id="closeBtn" class="close" title="Đóng">×</button>
       </div>
       <div class="body">
-        <div class="brand"><button id="reviewBtn" class="review-btn" title="Mở ôn tập deck">▶</button><span>WordDeck</span></div>
+        <div class="brand"><button id="reviewBtn" class="review-btn" title="Mở ôn tập deck">Ôn tập</button><span>WordDeck</span></div>
         <div class="divider"></div>
         <div class="result">
           <div>
@@ -273,11 +274,11 @@ function installShadowUi() {
             <div id="panelMeanings"></div>
             <div id="panelDefinitions"></div>
           </div>
-          <button class="check" id="savedMark" title="Đã lưu — mở ôn tập deck">✓</button>
+          <button class="check" id="savedMark" title="Đã lưu — mở ôn tập deck">Lưu</button>
         </div>
-        <div class="auto"><span class="auto-dot">✓</span><span>Đã lưu vào deck</span></div>
+        <div class="auto"><span class="auto-dot"></span><span>Đã lưu vào deck</span></div>
         <div class="panel-actions"><button id="deleteFromDeckBtn" class="delete-deck-btn hidden" type="button" title="Xóa từ này khỏi deck và bỏ highlight">Xóa khỏi deck</button></div>
-        <div class="note" id="panelStatus">Bấm icon để dịch và lưu gọn vào deck.</div>
+        <div class="note" id="panelStatus">Bấm nút để dịch và lưu gọn vào deck.</div>
       </div>
     </section>
   `;
@@ -381,8 +382,8 @@ function showSelectionIcon(selectionInfo) {
   applySelectionIconSettings();
 
   const rect = selectionInfo.rect || { left: lastPointer.x, right: lastPointer.x, top: lastPointer.y, bottom: lastPointer.y, width: 1, height: 1 };
-  const iconWidth = 34;
-  const iconHeight = 34;
+  const iconWidth = icon.offsetWidth || 36;
+  const iconHeight = icon.offsetHeight || 30;
   const margin = 6;
 
   // Center horizontally under the selected text
@@ -408,20 +409,8 @@ function getSelectionIconLabel() {
 }
 
 function applySelectionIconSettings() {
-  const label = uiRoot?.getElementById("iconLabel");
-  if (label) label.textContent = getSelectionIconLabel();
-
-  const iconImg = uiRoot?.querySelector("#selectionIcon img");
   const iconBtn = uiRoot?.getElementById("selectionIcon");
-  if (iconImg && iconBtn) {
-    if (settings.customIconDataUrl) {
-      iconImg.src = settings.customIconDataUrl;
-      iconBtn.classList.add("has-custom-icon");
-    } else {
-      iconImg.src = chrome.runtime.getURL("icon/image.png");
-      iconBtn.classList.remove("has-custom-icon");
-    }
-  }
+  if (iconBtn) iconBtn.textContent = getSelectionIconLabel();
 }
 
 function hideSelectionIcon() {
@@ -532,7 +521,7 @@ function showPanel({ x, y, word, translation, meanings = [], definitions = [], p
   uiRoot.getElementById("panelWord").textContent = word || "";
   uiRoot.getElementById("panelTranslation").textContent = translation || "";
   uiRoot.getElementById("panelStatus").textContent = status || "";
-  uiRoot.getElementById("savedMark").textContent = loading ? "…" : error ? "!" : saved ? "✓" : "✓";
+  uiRoot.getElementById("savedMark").textContent = loading ? "..." : error ? "Lỗi" : saved ? "Lưu" : "Lưu";
 
   const deleteBtn = uiRoot.getElementById("deleteFromDeckBtn");
   const entry = findDeckEntry(word);
@@ -739,7 +728,15 @@ function onSavedHighlightClick(event) {
 function findDeckEntry(word) {
   const normalized = String(word || "").toLowerCase().trim();
   if (!normalized) return null;
-  return deck.find((item) => item.normalized === normalized || String(item.word || "").toLowerCase() === normalized) || null;
+  if (deckLookupCache.source !== deck) {
+    deckLookupCache.source = deck;
+    deckLookupCache.byWord = new Map();
+    for (const item of deck || []) {
+      if (item?.normalized) deckLookupCache.byWord.set(String(item.normalized).toLowerCase(), item);
+      if (item?.word) deckLookupCache.byWord.set(String(item.word).toLowerCase(), item);
+    }
+  }
+  return deckLookupCache.byWord.get(normalized) || null;
 }
 
 async function onPageDoubleClick(event) {
@@ -1085,6 +1082,8 @@ function sendMessage(message) {
       chrome.runtime.sendMessage(message, (response) => {
         if (chrome.runtime.lastError) {
           const msg = chrome.runtime.lastError.message || "";
+          // Khi extension được cập nhật hoặc reload, các content script cũ trên trang web sẽ bị mất kết nối với background page,
+          // gây ra lỗi "Extension context invalidated". Ta bắt lỗi này và thông báo thân thiện để người dùng nhấn F5 tải lại trang.
           if (msg.includes("Extension context invalidated") || msg.includes("context invalidated")) {
             reject(new Error("Extension đã được reload. Hãy tải lại trang (F5) để tiếp tục dùng."));
           } else {
@@ -1099,6 +1098,7 @@ function sendMessage(message) {
         resolve(response || { ok: true });
       });
     } catch (err) {
+      // Bắt lỗi đồng bộ xảy ra ngay khi gọi chrome.runtime.sendMessage (khi context bị vô hiệu hóa hoàn toàn)
       if (err?.message?.includes("Extension context") || err?.message?.includes("context invalidated")) {
         reject(new Error("Extension đã được reload. Hãy tải lại trang (F5) để tiếp tục dùng."));
       } else {

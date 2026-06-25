@@ -1,16 +1,16 @@
 * { box-sizing: border-box; }
 :root {
-  --bg: #f5faf7;
+  --bg: #f6f7f6;
   --card: #ffffff;
-  --text: #1f2c28;
-  --muted: #5f6f69;
-  --line: #d7e4de;
-  --line-strong: #bfd2ca;
-  --accent: #3f8f7b;
-  --accent-strong: #2f6f61;
-  --accent-soft: #edf5f1;
-  --accent-soft-2: #f8fcfa;
-  --danger: #b14c64;
+  --text: #202927;
+  --muted: #64706c;
+  --line: #d9dfdc;
+  --line-strong: #bfc9c5;
+  --accent: #2f7668;
+  --accent-strong: #245d53;
+  --accent-soft: #eef2f0;
+  --accent-soft-2: #f7f8f7;
+  --danger: #a94357;
 }
 body {
   width: 420px;
@@ -34,10 +34,10 @@ p { margin: 0; }
 .panel {
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 8px;
   padding: 14px;
   margin-bottom: 12px;
-  box-shadow: 0 1px 2px rgba(27, 42, 37, 0.04);
+  box-shadow: 0 1px 1px rgba(20, 30, 27, 0.03);
 }
 .switch-row, .field {
   display: flex;
@@ -54,7 +54,7 @@ p { margin: 0; }
 select, input[type="search"], input[type="text"] {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 6px;
   padding: 9px 11px;
   font-size: 13px;
   background: #ffffff;
@@ -68,7 +68,7 @@ select:focus, input[type="search"]:focus, input[type="text"]:focus {
 }
 button, .import-label {
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 6px;
   padding: 8px 12px;
   font-weight: 600;
   font-size: 13px;
@@ -86,7 +86,7 @@ button:hover, .import-label:hover { background: var(--accent-soft-2); border-col
 .primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
 .secondary { background: var(--accent-soft); border-color: var(--line); color: var(--accent-strong); }
 .secondary:hover { background: #e6f1ec; }
-.ghost { background: transparent; border-color: transparent; color: var(--accent); padding: 6px 9px; }
+.ghost { background: #ffffff; border-color: var(--line); color: #38504a; padding: 7px 10px; }
 .ghost:hover { background: var(--accent-soft); border-color: var(--line); }
 .danger { background: #fff7f8; border-color: #edd5db; color: var(--danger); }
 .sync { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
@@ -104,12 +104,12 @@ button:hover, .import-label:hover { background: var(--accent-soft-2); border-col
   padding-right: 4px;
 }
 #deckList::-webkit-scrollbar { width: 8px; }
-#deckList::-webkit-scrollbar-thumb { background: #c6d7d0; border-radius: 999px; }
+#deckList::-webkit-scrollbar-thumb { background: #c6d1cd; border-radius: 6px; }
 #deckList::-webkit-scrollbar-track { background: transparent; }
 .vocab-card {
   border: 1px solid #cddbd5;
-  border-radius: 12px;
-  background: #edf3ef;
+  border-radius: 8px;
+  background: #ffffff;
   padding: 12px 12px 10px;
 }
 .vocab-top {
@@ -139,7 +139,7 @@ button:hover, .import-label:hover { background: var(--accent-soft-2); border-col
   padding: 6px 10px;
   min-width: 0;
   font-size: 12px;
-  border-radius: 9px;
+  border-radius: 6px;
 }
 .vocab-meanings {
   display: flex;
@@ -150,10 +150,10 @@ button:hover, .import-label:hover { background: var(--accent-soft-2); border-col
 .vocab-chip {
   display: inline-flex;
   align-items: center;
-  border-radius: 999px;
+  border-radius: 5px;
   padding: 3px 8px;
-  border: 1px solid #cbdad4;
-  background: #dde9e4;
+  border: 1px solid #d4ddda;
+  background: #f0f3f1;
   color: #304640;
   font-size: 11px;
   font-weight: 600;
@@ -164,9 +164,9 @@ button:hover, .import-label:hover { background: var(--accent-soft-2); border-col
   gap: 8px;
 }
 .vocab-def {
-  background: #e3ece7;
-  border: 1px solid #cfded7;
-  border-radius: 10px;
+  background: #f5f7f6;
+  border: 1px solid #d8dfdc;
+  border-radius: 6px;
   padding: 8px 9px;
 }
 .vocab-def-head {
@@ -211,7 +211,7 @@ button:hover, .import-label:hover { background: var(--accent-soft-2); border-col
 .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 16px 6px; }
 
 
-.clipboard-panel { background: #edf3ef; border-color: #cddbd5; }
+.clipboard-panel { background: #ffffff; border-color: var(--line); }
 .clipboard-head {
   display: grid;
   grid-template-columns: 1fr auto;

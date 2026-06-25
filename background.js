@@ -2,7 +2,8 @@ const STORAGE_KEYS = {
   DECK: "wordDeck",
   SETTINGS: "settings",
   GOOGLE_TOKEN: "googleAccessToken",
-  GOOGLE_TOKEN_EXPIRES_AT: "googleTokenExpiresAt"
+  GOOGLE_TOKEN_EXPIRES_AT: "googleTokenExpiresAt",
+  GOOGLE_AUTH_ENABLED: "googleAuthEnabled"
 };
 
 
@@ -25,6 +26,26 @@ const DEFAULT_SETTINGS = {
 
 const DRIVE_DECK_FILE_NAME = "worddeck-translator-deck.json";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
+const OPTIMIZER_LIMITS = {
+  TRANSLATION_CACHE_MAX: 80,
+  TRANSLATION_TTL_MS: 10 * 60 * 1000,
+  STORAGE_TTL_MS: 5 * 60 * 1000,
+  TRANSLATION_CONCURRENCY: 3,
+  DEFINITION_TRANSLATION_CONCURRENCY: 3
+};
+
+const optimizerState = {
+  rawDeck: null,
+  deck: null,
+  settings: null,
+  rawDeckReadAt: 0,
+  settingsReadAt: 0,
+  deckIndex: null,
+  translationCache: new Map(),
+  inFlightTranslations: new Map(),
+  activeTranslations: 0,
+  queuedTranslations: []
+};
 
 chrome.runtime.onInstalled.addListener(async () => {
   const settings = await getSettings();
@@ -43,14 +64,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Use alarms to run sync reliably — MV3 service workers can be suspended
 // before a fire-and-forget promise completes. Alarms wake the SW up.
+// Sử dụng alarms để thực hiện đồng bộ hóa (sync) một cách tin cậy.
+// Trong Manifest V3 (MV3), service worker có thể bị tạm dừng (suspended) bất cứ lúc nào
+// khi không có tác vụ nào đang xử lý, ngay cả khi một Promise chạy nền chưa hoàn thành.
+// chrome.alarms đảm bảo Chrome sẽ kích hoạt/đánh thức service worker để thực hiện hết tác vụ sync.
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "pendingSync") {
     tryAutoSync();
   }
 });
 
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  if (changes[STORAGE_KEYS.DECK]) hydrateDeckCache(changes[STORAGE_KEYS.DECK].newValue);
+  if (changes[STORAGE_KEYS.SETTINGS]) hydrateSettingsCache(changes[STORAGE_KEYS.SETTINGS].newValue);
+});
+
 function scheduleSyncAlarm() {
-  // delayInMinutes must be >= 1/60 (about 1 second) per Chrome spec
+  // delayInMinutes tối thiểu phải >= 1/60 (tương đương 1 giây) theo quy định của Chrome API
   chrome.alarms.create("pendingSync", { delayInMinutes: 1 / 60 });
 }
 
@@ -68,6 +99,7 @@ async function handleMessage(message, sender) {
       return { ok: true, deck: await getDeck() };
     }
     case "TRANSLATE_WORD": {
+
       const word = normalizeWord(message.word);
       if (!word) throw new Error("No word to translate");
       const rawDeck = await getRawDeck();
@@ -105,6 +137,26 @@ async function handleMessage(message, sender) {
         provider: translated.provider,
         fromDeck: false
       };
+=======
+      const deck = await getDeck();
+      return { ok: true, ...(await translateWordPayload(message.word, deck)) };
+    }
+    case "TRANSLATE_WORDS": {
+      const words = Array.isArray(message.words) ? message.words : [];
+      const normalizedWords = uniqueClean(words.map(normalizeWord)).slice(0, 30);
+      if (!normalizedWords.length) throw new Error("No words to translate");
+
+      const deck = await getDeck();
+      const results = await Promise.all(normalizedWords.map(async (word) => {
+        try {
+          return { ok: true, ...(await translateWordPayload(word, deck)) };
+        } catch (error) {
+          return { ok: false, word, error: error?.message || String(error) };
+        }
+      }));
+
+      return { ok: true, results };
+
     }
     case "SAVE_WORD": {
       const entry = await saveWord(message.payload || {}, sender?.tab || null);
@@ -168,14 +220,16 @@ async function handleMessage(message, sender) {
     }
     case "GOOGLE_LOGIN": {
       const token = await getGoogleAccessToken(true);
+      await chrome.storage.local.set({ [STORAGE_KEYS.GOOGLE_AUTH_ENABLED]: Boolean(token) });
       return { ok: true, hasToken: Boolean(token) };
     }
     case "GOOGLE_LOGOUT": {
-      await clearGoogleToken();
+      await clearGoogleAuth();
       return { ok: true };
     }
     case "GOOGLE_SYNC": {
       const result = await syncDeckWithGoogleDrive(true);
+      await chrome.storage.local.set({ [STORAGE_KEYS.GOOGLE_AUTH_ENABLED]: true });
       await broadcastDeckChanged();
       await chrome.storage.local.set({ lastSyncTime: Date.now() });
       return { ok: true, ...result };
@@ -246,19 +300,192 @@ function matchesDeleteTarget(item, targets) {
   return false;
 }
 
+async function translateWordPayload(rawWord, deck = null) {
+  const word = normalizeWord(rawWord);
+  if (!word) throw new Error("No word to translate");
+
+  const activeDeck = deck || await getDeck();
+  const existing = findDeckEntryInDeck(activeDeck, word);
+  if (existing?.translation) {
+    return {
+      word,
+      translation: existing.translation,
+      meanings: existing.meanings || [existing.translation],
+      definitions: existing.definitions || [],
+      provider: existing.provider || "deck",
+      fromDeck: true,
+      entry: existing
+    };
+  }
+
+  const translated = await translateWordOptimized(word);
+  return {
+    word,
+    translation: translated.primary,
+    meanings: translated.meanings,
+    definitions: translated.definitions,
+    provider: translated.provider,
+    fromDeck: false
+  };
+}
+
+function hydrateDeckCache(value) {
+  optimizerState.rawDeck = Array.isArray(value) ? sanitizeDeck(value) : null;
+  optimizerState.deck = optimizerState.rawDeck ? optimizerState.rawDeck.filter((item) => !item.deleted) : null;
+  optimizerState.deckIndex = null;
+  optimizerState.rawDeckReadAt = optimizerState.rawDeck ? Date.now() : 0;
+}
+
+function hydrateSettingsCache(value) {
+  optimizerState.settings = value && typeof value === "object"
+    ? normalizeSettings({ ...DEFAULT_SETTINGS, ...value })
+    : null;
+  optimizerState.settingsReadAt = optimizerState.settings ? Date.now() : 0;
+  clearTranslationCache();
+}
+
+function invalidateDeckCache() {
+  optimizerState.rawDeck = null;
+  optimizerState.deck = null;
+  optimizerState.deckIndex = null;
+  optimizerState.rawDeckReadAt = 0;
+}
+
+function invalidateSettingsCache() {
+  optimizerState.settings = null;
+  optimizerState.settingsReadAt = 0;
+  clearTranslationCache();
+}
+
+function findDeckEntryInDeck(deck, word) {
+  const normalized = String(word || "").toLowerCase().trim();
+  if (!normalized) return null;
+
+  if (!optimizerState.deckIndex || optimizerState.deckIndex.source !== deck) {
+    const byWord = new Map();
+    for (const item of deck || []) {
+      if (item?.normalized) byWord.set(String(item.normalized).toLowerCase(), item);
+      if (item?.word) byWord.set(String(item.word).toLowerCase(), item);
+    }
+    optimizerState.deckIndex = { source: deck, byWord };
+  }
+
+  return optimizerState.deckIndex.byWord.get(normalized) || null;
+}
+
+async function translateWordOptimized(word) {
+  const normalized = normalizeWord(word);
+  if (!normalized) throw new Error("No word to translate");
+
+  const settings = await getSettings();
+  const cacheKey = makeTranslationCacheKey(normalized, settings);
+  const cached = optimizerState.translationCache.get(cacheKey);
+  if (cached && Date.now() - cached.createdAt < OPTIMIZER_LIMITS.TRANSLATION_TTL_MS) {
+    return { ...cached.value };
+  }
+
+  const inFlight = optimizerState.inFlightTranslations.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const task = enqueueTranslationTask(() => translateWordToVietnamese(normalized))
+    .then((result) => {
+      rememberTranslation(cacheKey, result);
+      return result;
+    })
+    .finally(() => {
+      optimizerState.inFlightTranslations.delete(cacheKey);
+    });
+
+  optimizerState.inFlightTranslations.set(cacheKey, task);
+  return task;
+}
+
+function enqueueTranslationTask(taskFactory) {
+  return new Promise((resolve, reject) => {
+    optimizerState.queuedTranslations.push({ taskFactory, resolve, reject });
+    drainTranslationQueue();
+  });
+}
+
+function drainTranslationQueue() {
+  while (
+    optimizerState.activeTranslations < OPTIMIZER_LIMITS.TRANSLATION_CONCURRENCY &&
+    optimizerState.queuedTranslations.length
+  ) {
+    const task = optimizerState.queuedTranslations.shift();
+    optimizerState.activeTranslations++;
+
+    Promise.resolve()
+      .then(task.taskFactory)
+      .then(task.resolve, task.reject)
+      .finally(() => {
+        optimizerState.activeTranslations = Math.max(0, optimizerState.activeTranslations - 1);
+        drainTranslationQueue();
+      });
+  }
+}
+
+function makeTranslationCacheKey(word, settings) {
+  const provider = settings.translationProvider || "gemini";
+  const geminiReady = provider === "gemini" && settings.geminiApiKey ? "gemini-key" : "no-gemini-key";
+  const memoryEmail = settings.myMemoryEmail ? "memory-email" : "no-memory-email";
+  return [
+    word.toLowerCase(),
+    provider,
+    normalizeGeminiModel(settings.geminiModel),
+    geminiReady,
+    memoryEmail
+  ].join("|");
+}
+
+function rememberTranslation(cacheKey, value) {
+  optimizerState.translationCache.set(cacheKey, {
+    value,
+    createdAt: Date.now()
+  });
+
+  while (optimizerState.translationCache.size > OPTIMIZER_LIMITS.TRANSLATION_CACHE_MAX) {
+    const oldestKey = optimizerState.translationCache.keys().next().value;
+    optimizerState.translationCache.delete(oldestKey);
+  }
+}
+
+function clearTranslationCache() {
+  optimizerState.translationCache.clear();
+  optimizerState.inFlightTranslations.clear();
+}
+
 
 async function getRawDeck() {
+  if (optimizerState.rawDeck && Date.now() - optimizerState.rawDeckReadAt < OPTIMIZER_LIMITS.STORAGE_TTL_MS) {
+    return optimizerState.rawDeck;
+  }
   const data = await chrome.storage.local.get(STORAGE_KEYS.DECK);
-  return Array.isArray(data[STORAGE_KEYS.DECK]) ? sanitizeDeck(data[STORAGE_KEYS.DECK]) : [];
+  const rawDeck = Array.isArray(data[STORAGE_KEYS.DECK]) ? sanitizeDeck(data[STORAGE_KEYS.DECK]) : [];
+  optimizerState.rawDeck = rawDeck;
+  optimizerState.deck = null;
+  optimizerState.deckIndex = null;
+  optimizerState.rawDeckReadAt = Date.now();
+  return rawDeck;
 }
 
 async function setRawDeck(deck) {
-  await chrome.storage.local.set({ [STORAGE_KEYS.DECK]: sanitizeDeck(deck) });
+  const rawDeck = sanitizeDeck(deck);
+  optimizerState.rawDeck = rawDeck;
+  optimizerState.deck = null;
+  optimizerState.deckIndex = null;
+  optimizerState.rawDeckReadAt = Date.now();
+  await chrome.storage.local.set({ [STORAGE_KEYS.DECK]: rawDeck });
 }
 
 async function getDeck() {
+  if (optimizerState.deck && Date.now() - optimizerState.rawDeckReadAt < OPTIMIZER_LIMITS.STORAGE_TTL_MS) {
+    return optimizerState.deck;
+  }
   const rawDeck = await getRawDeck();
-  return rawDeck.filter((item) => !item.deleted);
+  optimizerState.deck = rawDeck.filter((item) => !item.deleted);
+  optimizerState.deckIndex = null;
+  return optimizerState.deck;
 }
 
 async function setDeck(deck) {
@@ -266,8 +493,13 @@ async function setDeck(deck) {
 }
 
 async function getSettings() {
+  if (optimizerState.settings && Date.now() - optimizerState.settingsReadAt < OPTIMIZER_LIMITS.STORAGE_TTL_MS) {
+    return optimizerState.settings;
+  }
   const data = await chrome.storage.local.get(STORAGE_KEYS.SETTINGS);
-  return normalizeSettings({ ...DEFAULT_SETTINGS, ...(data[STORAGE_KEYS.SETTINGS] || {}) });
+  optimizerState.settings = normalizeSettings({ ...DEFAULT_SETTINGS, ...(data[STORAGE_KEYS.SETTINGS] || {}) });
+  optimizerState.settingsReadAt = Date.now();
+  return optimizerState.settings;
 }
 
 function normalizeSettings(settings) {
@@ -312,6 +544,9 @@ async function updateSettings(patch) {
   if (patch.clickTranslateEnabled === true) settings.selectionIconEnabled = false;
 
   const normalized = normalizeSettings(settings);
+  optimizerState.settings = normalized;
+  optimizerState.settingsReadAt = Date.now();
+  clearTranslationCache();
   await chrome.storage.local.set({ [STORAGE_KEYS.SETTINGS]: normalized });
   return normalized;
 }
@@ -591,15 +826,34 @@ async function fetchDictionaryDefinitions(word) {
   }
 
   // Dịch nhanh định nghĩa sang tiếng Việt để panel có “các nghĩa” dễ học hơn.
-  const translated = [];
-  for (const item of raw.slice(0, 4)) {
-    let viDefinition = "";
-    try {
-      viDefinition = (await translateViaMyMemory(item.definition)).primary;
-    } catch (_) { }
-    translated.push({ ...item, viDefinition: viDefinition || item.definition });
+  return mapWithConcurrency(
+    raw.slice(0, 4),
+    OPTIMIZER_LIMITS.DEFINITION_TRANSLATION_CONCURRENCY,
+    async (item) => {
+      let viDefinition = "";
+      try {
+        viDefinition = (await translateViaMyMemory(item.definition)).primary;
+      } catch (_) { }
+      return { ...item, viDefinition: viDefinition || item.definition };
+    }
+  );
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const list = Array.isArray(items) ? items : [];
+  const limit = Math.max(1, Math.min(Number(concurrency) || 1, list.length || 1));
+  const results = new Array(list.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < list.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(list[index], index);
+    }
   }
-  return translated;
+
+  await Promise.all(Array.from({ length: limit }, worker));
+  return results;
 }
 
 function uniqueClean(items) {
@@ -860,8 +1114,8 @@ async function getGoogleAccessToken(interactive = true) {
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("scope", DRIVE_SCOPE);
   authUrl.searchParams.set("include_granted_scopes", "true");
-  // silent: prompt=none so Google returns token if session exists, no popup
-  // interactive: no extra prompt param — Google shows account picker only if needed
+  // silent: prompt=none giúp lấy token tự động không hiển thị giao diện popup nếu phiên làm việc của Google còn hoạt động
+  // interactive: không đặt prompt=consent để tránh bắt người dùng phải liên tục cấp quyền (grant consent) mỗi lần đăng nhập thủ công
   if (!interactive) {
     authUrl.searchParams.set("prompt", "none");
   }
@@ -884,10 +1138,13 @@ async function getGoogleAccessToken(interactive = true) {
 
     await chrome.storage.local.set({
       [STORAGE_KEYS.GOOGLE_TOKEN]: accessToken,
-      [STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT]: Date.now() + expiresIn * 1000
+      [STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT]: Date.now() + expiresIn * 1000,
+      [STORAGE_KEYS.GOOGLE_AUTH_ENABLED]: true
     });
     return accessToken;
   } catch (err) {
+    // Nếu chạy ngầm (silent) thất bại (ví dụ: hết phiên Google), bỏ qua lỗi thay vì crash hoặc hiện popup phiền toái.
+    // Lần sau khi người dùng mở popup hoặc bấm thủ công, flow interactive mới yêu cầu đăng nhập.
     if (!interactive) {
       console.warn("Silent OAuth flow failed:", err?.message || err);
       return null;
@@ -896,7 +1153,7 @@ async function getGoogleAccessToken(interactive = true) {
   }
 }
 
-async function clearGoogleToken() {
+async function revokeStoredGoogleToken() {
   const data = await chrome.storage.local.get(STORAGE_KEYS.GOOGLE_TOKEN);
   const token = data[STORAGE_KEYS.GOOGLE_TOKEN];
   if (token) {
@@ -907,9 +1164,21 @@ async function clearGoogleToken() {
       });
     } catch (_) { }
   }
+}
+
+async function clearExpiredGoogleToken() {
   await chrome.storage.local.remove([
     STORAGE_KEYS.GOOGLE_TOKEN,
     STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT
+  ]);
+}
+
+async function clearGoogleAuth() {
+  await revokeStoredGoogleToken();
+  await chrome.storage.local.remove([
+    STORAGE_KEYS.GOOGLE_TOKEN,
+    STORAGE_KEYS.GOOGLE_TOKEN_EXPIRES_AT,
+    STORAGE_KEYS.GOOGLE_AUTH_ENABLED
   ]);
 }
 
@@ -920,8 +1189,8 @@ async function driveFetch(path, options = {}, interactive = true) {
   headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(path, { ...options, headers });
   if (response.status === 401) {
-    await clearGoogleToken();
-    throw new Error("Google token expired. Please sync again and login.");
+    await clearExpiredGoogleToken();
+    throw new Error("Google token expired. Silent refresh will be retried on the next sync.");
   }
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -1014,8 +1283,11 @@ async function hasValidGoogleToken() {
 }
 
 async function hasLoggedInBefore() {
-  const stored = await chrome.storage.local.get(STORAGE_KEYS.GOOGLE_TOKEN);
-  return !!stored[STORAGE_KEYS.GOOGLE_TOKEN];
+  const stored = await chrome.storage.local.get([
+    STORAGE_KEYS.GOOGLE_AUTH_ENABLED,
+    STORAGE_KEYS.GOOGLE_TOKEN
+  ]);
+  return stored[STORAGE_KEYS.GOOGLE_AUTH_ENABLED] === true || !!stored[STORAGE_KEYS.GOOGLE_TOKEN];
 }
 
 async function tryAutoSync(cooldownMs = 0) {
@@ -1024,22 +1296,24 @@ async function tryAutoSync(cooldownMs = 0) {
     const clientId = String(settings.googleClientId || "").trim();
     if (!clientId) return;
 
+    // Kiểm tra xem đã từng đăng nhập thành công trước đó chưa
     const loggedIn = await hasLoggedInBefore();
     if (!loggedIn) return;
 
+    // Kiểm tra cơ chế chống spam (cooldown) để tránh gửi quá nhiều request lên Drive API liên tục
     if (cooldownMs > 0) {
       const stored = await chrome.storage.local.get("lastSyncTime");
       const lastSync = Number(stored.lastSyncTime || 0);
       if (Date.now() - lastSync < cooldownMs) return;
     }
 
-    // If token is still valid, sync straight away.
-    // If expired, attempt a silent OAuth refresh. If that also fails,
-    // skip quietly — the user will need to click "Login & Sync" once.
+    // Nếu token cũ còn hạn, tiến hành đồng bộ luôn.
+    // Nếu token cũ hết hạn, thử làm mới token một cách im lặng (silent OAuth refresh).
+    // Nếu làm mới im lặng thất bại (do hết hạn session Google), bỏ qua và đợi người dùng nhấn nút thủ công sau.
     const tokenValid = await hasValidGoogleToken();
     if (!tokenValid) {
       const silentToken = await getGoogleAccessToken(false).catch(() => null);
-      if (!silentToken) return; // can't renew silently, skip
+      if (!silentToken) return; // Không thể lấy token tự động, bỏ qua đồng bộ ngầm lần này
     }
 
     await syncDeckWithGoogleDrive(false);

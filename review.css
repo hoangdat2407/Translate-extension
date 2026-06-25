@@ -1,16 +1,16 @@
 * { box-sizing: border-box; }
 :root {
-  --bg: #f7fbf9;
+  --bg: #f6f7f6;
   --card: #ffffff;
-  --text: #24332f;
-  --muted: #6e7e79;
-  --line: #d9e8e3;
-  --line-strong: #c7ddd5;
-  --accent: #3f8f7b;
-  --accent-hover: #357a69;
-  --accent-soft: #eef6f2;
-  --accent-soft-2: #f6fbf8;
-  --danger: #b85166;
+  --text: #202927;
+  --muted: #65716d;
+  --line: #d9dfdc;
+  --line-strong: #bfc9c5;
+  --accent: #2f7668;
+  --accent-hover: #245d53;
+  --accent-soft: #eef2f0;
+  --accent-soft-2: #f7f8f7;
+  --danger: #a94357;
 }
 body {
   margin: 0;
@@ -33,7 +33,7 @@ p { margin: 0; }
 input[type="search"] {
   flex: 1 1 280px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 6px;
   padding: 10px 14px;
   font-size: 13px;
   background: #ffffff;
@@ -47,7 +47,7 @@ input[type="search"]:focus {
 }
 button {
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 6px;
   padding: 10px 14px;
   font-weight: 600;
   font-size: 13px;
@@ -67,8 +67,8 @@ button:hover { background: var(--accent-soft-2); border-color: var(--line-strong
   min-height: 280px;
   background: #ffffff;
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: 0 1px 2px rgba(34, 50, 44, 0.04);
+  border-radius: 8px;
+  box-shadow: 0 1px 1px rgba(20, 30, 27, 0.03);
   padding: 34px;
   display: flex;
   flex-direction: column;
@@ -104,7 +104,7 @@ button:hover { background: var(--accent-soft-2); border-color: var(--line-strong
 .hint { margin-top: 14px; color: var(--muted); font-size: 12px; }
 kbd {
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: #fff;
   font-size: 11px;
@@ -113,7 +113,7 @@ kbd {
 .mini-item {
   border: 1px solid var(--line);
   background: #fff;
-  border-radius: 10px;
+  border-radius: 6px;
   padding: 8px 10px;
   cursor: pointer;
 }
