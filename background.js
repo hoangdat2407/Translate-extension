@@ -99,45 +99,6 @@ async function handleMessage(message, sender) {
       return { ok: true, deck: await getDeck() };
     }
     case "TRANSLATE_WORD": {
-
-      const word = normalizeWord(message.word);
-      if (!word) throw new Error("No word to translate");
-      const rawDeck = await getRawDeck();
-      const existingIndex = rawDeck.findIndex((item) => item.normalized === word.toLowerCase());
-      const existing = existingIndex >= 0 ? rawDeck[existingIndex] : null;
-      if (existing?.translation && !existing.deleted) {
-        // Cập nhật timesSeen và updatedAt mỗi khi xem lại từ đã lưu
-        const now = new Date().toISOString();
-        rawDeck[existingIndex] = {
-          ...existing,
-          timesSeen: (existing.timesSeen || 0) + 1,
-          updatedAt: now
-        };
-        await setRawDeck(rawDeck);
-        await broadcastDeckChanged();
-        tryAutoSync();
-        return {
-          ok: true,
-          word,
-          translation: existing.translation,
-          meanings: existing.meanings || [existing.translation],
-          definitions: existing.definitions || [],
-          provider: existing.provider || "deck",
-          fromDeck: true,
-          entry: rawDeck[existingIndex]
-        };
-      }
-      const translated = await translateWordToVietnamese(word);
-      return {
-        ok: true,
-        word,
-        translation: translated.primary,
-        meanings: translated.meanings,
-        definitions: translated.definitions,
-        provider: translated.provider,
-        fromDeck: false
-      };
-=======
       const deck = await getDeck();
       return { ok: true, ...(await translateWordPayload(message.word, deck)) };
     }

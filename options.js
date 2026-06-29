@@ -12,9 +12,14 @@ const els = {
   highlightEnabled: document.getElementById("highlightEnabled"),
   autoSaveOnDoubleClick: document.getElementById("autoSaveOnDoubleClick"),
   clickMode: document.getElementById("clickMode"),
+  customIconFile: document.getElementById("customIconFile"),
+  clearCustomIcon: document.getElementById("clearCustomIcon"),
+  iconPreview: document.getElementById("iconPreview"),
   save: document.getElementById("save"),
   status: document.getElementById("status")
 };
+
+let customIconDataUrl = "";
 
 init();
 
@@ -32,6 +37,8 @@ async function init() {
   els.highlightEnabled.checked = Boolean(settings.highlightEnabled);
   els.autoSaveOnDoubleClick.checked = settings.autoSaveOnDoubleClick !== false;
   els.clickMode.value = settings.clickMode || "single";
+  customIconDataUrl = settings.customIconDataUrl || "";
+  renderIconPreview();
   els.redirectUri.value = state.redirectUri || chrome.identity.getRedirectURL("oauth2");
 
   els.copyRedirect.addEventListener("click", async () => {
@@ -41,6 +48,13 @@ async function init() {
   });
 
   els.save.addEventListener("click", saveSettings);
+  if (els.customIconFile) els.customIconFile.addEventListener("change", handleIconFileChange);
+  if (els.clearCustomIcon) els.clearCustomIcon.addEventListener("click", () => {
+    customIconDataUrl = "";
+    if (els.customIconFile) els.customIconFile.value = "";
+    renderIconPreview();
+  });
+  if (els.selectionIconLabel) els.selectionIconLabel.addEventListener("input", renderIconPreview);
 }
 
 async function saveSettings() {
@@ -61,7 +75,7 @@ async function saveSettings() {
         highlightEnabled: els.highlightEnabled.checked,
         autoSaveOnDoubleClick: els.autoSaveOnDoubleClick.checked,
         clickMode: els.clickMode.value,
-        customIconDataUrl: ""
+        customIconDataUrl
       }
     });
     els.status.textContent = "Đã lưu.";
@@ -91,5 +105,74 @@ function sendMessage(message) {
       }
       resolve(response || { ok: true });
     });
+  });
+}
+
+async function handleIconFileChange() {
+  const file = els.customIconFile?.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    els.status.textContent = "File khong phai anh.";
+    return;
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    els.status.textContent = "Anh qua lon. Chon anh nho hon 10MB.";
+    return;
+  }
+
+  els.status.textContent = "Dang xu ly anh...";
+  customIconDataUrl = await resizeIconImage(file);
+  renderIconPreview();
+  els.status.textContent = "Da tai anh icon. Bam Luu cau hinh de ap dung.";
+}
+
+function renderIconPreview() {
+  if (!els.iconPreview) return;
+  els.iconPreview.textContent = "";
+  els.iconPreview.style.backgroundImage = "";
+  if (customIconDataUrl) {
+    els.iconPreview.classList.add("has-image");
+    els.iconPreview.style.backgroundImage = `url("${customIconDataUrl}")`;
+  } else {
+    els.iconPreview.classList.remove("has-image");
+    els.iconPreview.textContent = normalizeIconLabel(els.selectionIconLabel?.value || "VI");
+  }
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Khong doc duoc anh"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function resizeIconImage(file) {
+  const sourceUrl = await readFileAsDataUrl(file);
+  const image = await loadImage(sourceUrl);
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+
+  context.clearRect(0, 0, size, size);
+  const scale = Math.max(size / image.naturalWidth, size / image.naturalHeight);
+  const width = image.naturalWidth * scale;
+  const height = image.naturalHeight * scale;
+  const x = (size - width) / 2;
+  const y = (size - height) / 2;
+  context.drawImage(image, x, y, width, height);
+
+  return canvas.toDataURL("image/webp", 0.86);
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Khong load duoc anh"));
+    image.src = src;
   });
 }

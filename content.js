@@ -5,7 +5,8 @@ let settings = {
   clickMode: "single",
   highlightEnabled: true,
   autoSaveOnDoubleClick: false,
-  selectionIconLabel: "VI"
+  selectionIconLabel: "VI",
+  customIconDataUrl: ""
 };
 
 let lastDoubleClickAt = 0;
@@ -144,6 +145,18 @@ function installShadowUi() {
         z-index: 999;
       }
       #selectionIcon:hover { transform: translateY(-1px); background: #f6f8f7; border-color: #aebfba; box-shadow: 0 4px 10px rgba(20, 30, 27, 0.12); }
+      #selectionIcon.has-image {
+        width: 34px;
+        min-width: 34px;
+        height: 34px;
+        padding: 3px;
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        color: transparent;
+        overflow: hidden;
+      }
+      #selectionIcon.has-image:hover { background-color: #ffffff; }
 
       #panel {
         position: fixed;
@@ -410,7 +423,21 @@ function getSelectionIconLabel() {
 
 function applySelectionIconSettings() {
   const iconBtn = uiRoot?.getElementById("selectionIcon");
-  if (iconBtn) iconBtn.textContent = getSelectionIconLabel();
+  if (!iconBtn) return;
+
+  const imageUrl = typeof settings.customIconDataUrl === "string" ? settings.customIconDataUrl : "";
+  if (imageUrl) {
+    iconBtn.classList.add("has-image");
+    iconBtn.style.backgroundImage = `url("${imageUrl}")`;
+    iconBtn.textContent = "";
+    iconBtn.setAttribute("aria-label", getSelectionIconLabel());
+    return;
+  }
+
+  iconBtn.classList.remove("has-image");
+  iconBtn.style.backgroundImage = "";
+  iconBtn.textContent = getSelectionIconLabel();
+  iconBtn.removeAttribute("aria-label");
 }
 
 function hideSelectionIcon() {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WordDeck Translator",
-  "version": "1.0.25",
+  "version": "1.0.28",
   "description": "Select text to translate with a floating icon, auto-save vocabulary cards, review flashcards, highlight saved words, and sync via Google Drive OAuth.",
   "permissions": [
     "storage",

@@ -56,6 +56,14 @@
         <span>Nhãn nút nổi khi bôi đen</span>
         <input id="selectionIconLabel" type="text" maxlength="3" placeholder="VI" />
       </label>
+      <div class="icon-upload">
+        <div id="iconPreview" class="icon-preview">VI</div>
+        <label class="secondary upload-button">
+          Chon anh icon
+          <input id="customIconFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+        </label>
+        <button id="clearCustomIcon" class="secondary" type="button">Xoa anh</button>
+      </div>
       <label class="check"><input id="clickTranslateEnabled" type="checkbox" /> Bật dịch bằng click cũ</label>
       <label class="check"><input id="highlightEnabled" type="checkbox" /> Highlight từ đã lưu</label>
       <label class="check"><input id="autoSaveOnDoubleClick" type="checkbox" /> Double-click tự dịch và tự lưu khi dùng mode click cũ</label>

@@ -68,3 +68,36 @@ button:hover { background: var(--accent-soft-2); border-color: var(--line-strong
 .secondary:hover { background: #e7f2ed; }
 #status { color: var(--muted); font-size: 12px; }
 .hidden { display: none !important; }
+
+.icon-upload {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: -2px 0 14px;
+}
+.icon-preview {
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--accent-hover);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  overflow: hidden;
+}
+.icon-preview.has-image { color: transparent; }
+.upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  cursor: pointer;
+}
